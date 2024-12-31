@@ -100,4 +100,23 @@ functions = [
             },
         }
     },
+    # {
+    #     "type": "function",
+    #     "function": {
+    #         "name": "display_message",
+    #         "description": "Displays the message to the user.",
+    #         "parameters": {
+    #             "type": "object",
+    #             "properties": {
+    #                 "messages": {
+    #                     "type": "string",
+    #                     "description": "The text to display to the user.",
+    #                     "example_value": "Here is the information you asked for....",
+    #                 },
+    #             },
+    #             "required": [],
+    #             "optional": [],
+    #         },
+    #     }
+    # }
 ]
