@@ -71,7 +71,7 @@ Actions:
             main_content = get_main_content(self.page)
             
             # Combine all information
-            return f"{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}"
+            return f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***"
             
         except Exception as e:
             print(f"Error getting page contents: {e}")

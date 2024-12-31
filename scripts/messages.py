@@ -171,19 +171,36 @@ class MessageHistory:
         return [msg.to_dict() for msg in self.messages]
         
     def trim_history(self, max_messages: int) -> None:
-        """Trim message history to keep only recent messages if exceeding max length, 
-        handling special JSON markers by always replacing content in all but the last occurrence."""
+        """Trim message history to keep only recent messages if exceeding max length,
+        preserving only the last occurrence of special JSON markers."""
         import re
 
-        # Always replace JSON content in all but the last occurrence
-        # json_messages = [i for i, msg in enumerate(self.messages) if hasattr(msg, 'content') and "***PAGE JSON***" in msg.content and "***END OF PAGE JSON***" in msg.content]
-        # for i in json_messages[:-1]:
-        #     if hasattr(self.messages[i], 'content'):
-        #         self.messages[i].content = re.sub(r'\*\*\*PAGE JSON\*\*\*.*?\*\*\*END OF PAGE JSON\*\*\*', '***PAGE JSON*** ***END OF PAGE JSON***', self.messages[i].content, flags=re.DOTALL)
+        # Replace JSON content in all but the last occurrence
+        json_pattern = r'\*\*\*PAGE JSON\*\*\*.*?\*\*\*END OF PAGE JSON\*\*\*'
+        
+        # Find all messages containing JSON markers
+        json_messages = []
+        for i, msg in enumerate(self.messages):
+            if isinstance(msg.content, str) and "***PAGE JSON***" in msg.content and "***END OF PAGE JSON***" in msg.content:
+                json_messages.append(i)
+        
+        # Replace content in all but the last occurrence
+        if len(json_messages) > 1:
+            for i in json_messages[:-1]:
+                self.messages[i].content = re.sub(
+                    json_pattern,
+                    '***PAGE JSON*** <stale> ***END OF PAGE JSON***',
+                    self.messages[i].content,
+                    flags=re.DOTALL
+                )
 
-        # Truncate only if the history exceeds max_messages
+        # Truncate history if it exceeds max_messages
         if len(self.messages) > max_messages + 2:
+            # Keep system message (index 0) and last max_messages
             self.messages = [self.messages[0]] + self.messages[-max_messages:]
+
+        # print(self.messages)
+
             
     def __len__(self) -> int:
         """Get number of messages in history."""
