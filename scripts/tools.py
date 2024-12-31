@@ -39,18 +39,13 @@ functions = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "type_name": {
+                    "xpath_selector": {
                         "type": "string",
-                        "description": "The type of the element (e.g., 'id', 'class', 'name').",
-                        "example_value": "id",
-                    },
-                    "class_name": {
-                        "type": "string",
-                        "description": "The class name of the element.",
-                        "example_value": "submit-button",
+                        "description": "The xpath selector for an element.",
+                        "example_value": "//a[contains(@href, 'google.x')], //a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'google.x')]",
                     },
                 },
-                "required": ["type_name", "class_name"],
+                "required": ["xpath_selector"],
                 "optional": [],
             },
         }
@@ -119,4 +114,17 @@ functions = [
     #         },
     #     }
     # }
+    {
+        "type": "function",
+        "function": {
+            "name": "highlight_active_element",
+            "description": "Highlight the active element.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "optional": [],
+            },
+        }
+    }
 ]

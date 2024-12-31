@@ -1,194 +1,232 @@
 import os
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.firefox.service import Service
-from selenium.webdriver.firefox.options import Options
-from selenium.common.exceptions import NoSuchElementException
 import time
-import metrics
-from metrics import *
-from defs import *
-from openai import OpenAI
 import json
 import base64
 import sys
 import traceback
-
-"""
-Worked class designed to perform web actions via tools.
-"""
+from playwright.sync_api import sync_playwright, Page, ElementHandle
+from playwright.sync_api import Page
+from openai import OpenAI
+from tools import *
+from metrics import *
+from web import *
+from messages import *
 
 class Worker:
     def __init__(self):
-        self.driver = None
-        self.active_element = None 
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.firefox.launch(headless=False)  # Set headless=True for production
+        self.context = self.browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            locale="en-US",
+            viewport=None
+        )
+        self.page = self.context.new_page()
+        self.active_element = None
         self.done = True
-        self.messages = [
-            {'role':'system','content':'''You are a helpful assistant designed to perform web actions via tools.
+        WORKER_SYSTEM_PROMPT = '''You are a helpful assistant designed to perform web actions via tools.
 
 Here are the tools provided to you:
 - move_to_url: Set a specific url as the active page.
 - get_url_contents: Get the contents from the active page. Required when a new url is opened or changes are made to the page.
-- set_active_element: Set a HTML page element as active (class names can be one of the following: 'id','class','name','tag','link','partial_link','xpath','css').
+- set_active_element: Set a HTML page element as active via an xpath selector.
 - send_keys_to_active_element: Send keys to page HTML element (for eg. to input text).
 - submit: Submit the active HTML element (for eg. to submit a form).
 - click_active_element: Click active HTML element.
+- highlight_active_element: Highlight active HTML element.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
 Actions:    
-    - Open the Google homepage (move_to_url)
-    - Get the HTML contents of the page (get_url_contents)
-    - Set the search bar as the active element (set_active_element)
-    - Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_active_element)
-    - Call submit on the search bar (call_submit). This will take you to the search results page.
-    - Get the HTML contents of the page (get_url_contents)
-    - Open the page that is more likely to have the answer (move_to_url/ set_active_element/ click_active_element)
-    - Read the contents and output the answer to the question.'''}
-]
+- Open the Google homepage (move_to_url)
+- Get the HTML contents of the page (get_url_contents)
+- Set the search bar as the active element (set_active_element)
+- Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_active_element)
+- Call submit on the search bar (call_submit). This will take you to the search results page.
+- Get the HTML contents of the page (get_url_contents)
+- Open the page that is more likely to have the answer (move_to_url/ set_active_element/ click_active_element)
+- Read the contents and output the answer to the question.'''
 
-        self.driver_options = Options()
-        # if  os.environ.get('FIREFOX_PROFILE'):
-        #     self.driver_options.profile = os.environ.get('FIREFOX_PROFILE')
-        #     if not os.path.exists(os.environ.get('FIREFOX_PROFILE')):
-        #         print(f"The profile path {os.environ.get('FIREFOX_PROFILE')} does not exist.")
-        #     else:
-        #         print("Profile path exists.")
-        # self.driver_options.add_argument("--headless")  # Run in headless mode for automation
-        self.driver = webdriver.Firefox(options=self.driver_options)
+        self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
 
     def move_to_url(self, url):
         try:
-            self.driver.get(url)
-        except:
-            return "Url Invalid."
-        # self.driver.implicitly_wait(5)
-        time.sleep(5)
-
-        return f"Current page set to {url}. Use get_url_contents to get the contents of the page."
+            self.page.goto(url, wait_until="networkidle")
+            return f"Current page set to {url}. Use get_url_contents to get the contents of the page."
+        except Exception as e:
+            return f"Error navigating to URL: {str(e)}"
 
     def get_url_contents(self):
-        self.active_element = None
+        """
+        Get a clean, structured representation of the page contents.
+        """
         try:
-            time_a = time.time()
-            elements = self.driver.find_elements(By.XPATH, "//*")
-            print(f"Time to get elements: {time.time() - time_a:.2f}s")
-            element_info = []
-            element_tags = []
-            ignored_tags = set(["script", "span",'hr', 'center', 'svg', 'rect', 'style', 'meta', 'link', 'path', 'img', 'div', 'picture', 'image'])
-            time_b = time.time()
-            for element in elements:
-                try:
-                    if element.tag_name in ignored_tags:
-                        continue
-                    
-                    if element.tag_name not in element_tags:
-                        element_tags.append(element.tag_name)
-                    info = {
-                        "tag_name": element.tag_name,
-                        "text": element.text if element.text else "No Text",
-                        "attributes": {},
-                        # "is_interactable": element.is_enabled()
-                    }
-                    for attr in ['id', 'class', 'href', 'src', 'title', 'alt', 'name']:
-                        value = element.get_attribute(attr)
-                        if value:
-                            info["attributes"][attr] = value
-                    if len(info["attributes"]) == 0 and info['text'] == "No Text":
-                        continue
-                    element_info.append(info)
-                except Exception as e:
-                    print(f"Error processing element: {e}")
-            print(f"Time to process elements: {time.time() - time_b:.2f}s")
+            # Get important page elements
+            elements_info = get_page_elements(self.page)
+            
+            # Get focused element (if any)
+            focused = get_focused_element_info(self.page)
+            
+            # Get main content
+            main_content = get_main_content(self.page)
+            
+            # Combine all information
+            return f"{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}"
+            
         except Exception as e:
-            print(f"An error occurred during GET: {e}")
-        print("Element tags:", element_tags)
-        return "*****HTML ELEMENTS**********\n\n" + str(element_info) + "\n\n ***********END OF HTML ELEMENTS*****"
+            print(f"Error getting page contents: {e}")
+            return f"Error analyzing page: {str(e)}"
 
     def find_element_by(self, locator_type, locator_value, input_type=None):
-        strategies = {
-            'id': By.ID,
-            'class': By.CLASS_NAME,
-            'name': By.NAME,
-            'tag': By.TAG_NAME,
-            'link': By.LINK_TEXT,
-            'partial_link': By.PARTIAL_LINK_TEXT,
-            'xpath': By.XPATH,
-            'css': By.CSS_SELECTOR
+        try:
+            selector = self._get_selector(locator_type, locator_value)
+            element = self.page.query_selector(selector)
+            
+            if element is None:
+                return None
+                
+            if input_type and element.evaluate("el => el.tagName.toLowerCase()") == 'input':
+                actual_type = element.get_attribute('type')
+                if actual_type != input_type:
+                    return None
+                    
+            return element
+            
+        except Exception as e:
+            print(f"Error finding element: {e}")
+            return None
+
+    def _get_selector(self, locator_type, locator_value):
+        selectors = {
+            'id': f'#{locator_value}',
+            'class': f'.{locator_value}',
+            'name': f'[name="{locator_value}"]',
+            'tag': locator_value,
+            'link': f'a:has-text("{locator_value}")',
+            'partial_link': f'a:has-text("{locator_value}")',
+            'xpath': locator_value,  # Playwright supports xpath directly
+            'css': locator_value,
+            'ariaLabel': f'[aria-label="{locator_value}"]',
         }
         
-        if locator_type.lower() in strategies:
-            try:
-                element = self.driver.find_element(strategies[locator_type.lower()], locator_value)
-                if input_type and element.tag_name == 'input':
-                    if element.get_attribute('type') != input_type:
-                        raise NoSuchElementException(f"Element found but type '{element.get_attribute('type')}' does not match '{input_type}'")
-                return element
-            except:
-                print("Element not found.")
-                return None
-        else:
-            raise ValueError(f"Unsupported locator type: {locator_type}. Available types are: {', '.join(strategies.keys())}")
+        if locator_type.lower() not in selectors:
+            print("Selector is None")
+            raise ValueError(f"Unsupported locator type: {locator_type}. Available types are: {', '.join(selectors.keys())}")
+            
+        return selectors[locator_type.lower()]
 
-    def set_active_element(self, type_name: str, class_name: str):
-        print(f"Getting element with type: {type_name} and class: {class_name}")
+    # def set_active_element(self, locator_type: str, locator_value: str):
+    def set_active_element(self, xpath_selector: str):
+        # print(f"Getting element with type: {locator_type} and class: {locator_value}")
+        print(f"Getting element with xpath selector: {xpath_selector}")
         try:
-            self.active_element = self.find_element_by(type_name, class_name)
+            # self.active_element = self.find_element_by(locator_type, locator_value)
+            self.active_element = self.page.query_selector(xpath_selector)
             if self.active_element is None:
-                return "Element not found. Invalid type_name/class_name/both. Recheck the arguments."
-        except:
-            return "Class element not found."
-        return f"Active element updated to element of class: {class_name}"
+                return "Element not found. Invalid xpath selector. Recheck the arguments."
+            else:
+                self.highlight_active_element()
+            # return f"Active element updated to element of class: {locator_value}"
+            return "Active element updated."
+        except Exception as e:
+            return f"Error setting active element: {str(e)}"
 
     def send_keys_to_active_element(self, keys: str):
         if self.active_element:
-            self.active_element.send_keys(keys)
-            # self.active_element.submit()
-            return "Keys sent to active element"
+            try:
+                self.active_element.fill(keys)
+                return "Keys sent to active element"
+            except Exception as e:
+                return f"Error sending keys to element: {str(e)}"
         return "Invalid active element. Set the active HTML element first."
+
+    def highlight_active_element(self, highlight_color='red', duration=30000):
+        """
+        Creates a bounding box around the active element temporarily using Playwright's API.
+
+        :param highlight_color: Color to use for the bounding box (default: red)
+        :param duration: Duration in milliseconds for which the box should stay (default: 30000ms)
+        """
+        try:
+            # Get the bounding box of the active element
+            bounding_box = self.active_element.bounding_box()
+            
+            if bounding_box:
+                # Create an object with all necessary data for the JavaScript to use
+                box_data = {
+                    'box': bounding_box,
+                    'color': highlight_color,
+                    'duration': duration
+                }
+                
+                # Use Page.evaluate with a single argument (an object)
+                self.page.evaluate('''
+                    (data) => {
+                        const div = document.createElement('div');
+                        div.style.cssText = `position:absolute;z-index:9999;border:4px solid ${data.color};pointer-events:none;`;
+                        div.style.left = `${data.box.x + window.scrollX}px`;
+                        div.style.top = `${data.box.y + window.scrollY}px`;
+                        div.style.width = `${data.box.width}px`;
+                        div.style.height = `${data.box.height}px`;
+                        document.body.appendChild(div);
+                        
+                        setTimeout(() => {
+                            if (div && div.parentNode) {
+                                div.parentNode.removeChild(div);
+                            }
+                        }, data.duration);
+                    }
+                ''', box_data)
+            else:
+                print("Could not get bounding box for the active element.")
+        except Exception as e:
+            print(f"Error highlighting active element: {e}")
+
+        return "Highlighted active element"
 
     def call_submit(self):
         try:
-            self.active_element.submit()
-            return "Successfully called submit on active element"
-        except:
-            return f"Error occurred while calling submit() on active element: {str(self.active_element)}"
+            if self.active_element:
+                # In Playwright, we can either press Enter or submit the form
+                form = self.active_element.evaluate("el => el.closest('form')")
+                if form:
+                    self.active_element.evaluate("el => el.form.submit()")
+                else:
+                    self.active_element.press('Enter')
+                return "Successfully called submit on active element"
+            return "No active element to submit"
+        except Exception as e:
+            return f"Error submitting form: {str(e)}"
 
     def click_active_element(self):
         try:
-            # Scroll the element into view using JavaScript
-            self.driver.execute_script("arguments[0].scrollIntoView(true);", self.active_element)
-            self.active_element.click()
-            return "Successfully called click on active element"
+            if self.active_element:
+                self.active_element.scroll_into_view_if_needed()
+                self.active_element.click()
+                return "Successfully called click on active element"
+            return "No active element to click"
         except Exception as e:
-            error_message = f"Error occurred while calling click() on active element: {str(self.active_element)}"
+            error_message = f"Error clicking element: {str(e)}"
             print(error_message)
-            print("Exception message:", str(e))
             print("Stack trace:", traceback.format_exc())
             return error_message
 
-    def on_task_completion(self):
-        self.done = True
-        return "Task completed"
-
-    #Main Loop
     def run(self):
         tool_dict = {
             "move_to_url": self.move_to_url,
             "get_url_contents": self.get_url_contents,
-            "set_active_element" : self.set_active_element,
-            "send_keys_to_active_element" : self.send_keys_to_active_element,
-            "call_submit" : self.call_submit,
-            "click_active_element" : self.click_active_element,
+            "set_active_element": self.set_active_element,
+            "send_keys_to_active_element": self.send_keys_to_active_element,
+            "call_submit": self.call_submit,
+            "click_active_element": self.click_active_element,
+            "highlight_active_element": self.highlight_active_element,
         }
+        
         api_key = os.environ.get('XAI_API_KEY')
-        # print("API:", api_key)
-
-        if api_key is None:
+        if api_key is None and self.api != "openai":
             print("XAI_API_KEY environment variable not set.")
             sys.exit(1)
+
         if self.api == "openai":
             client = OpenAI()
         else:
@@ -199,110 +237,57 @@ Actions:
 
         last_time = time.time()
 
-        while True:
-            curr_time = time.time()
+        try:
+            while True:
+                curr_time = time.time()
 
-            # print(self.messages)
+                if self.done:
+                    user_input = input("Enter:")
+                    self.done = False
+                    print(f"System: {user_input}")
 
-            #handle user input, if required
-            if self.done:
-                user_input = input("Enter:")
-                # Note: self.messages is passed by reference to get_system_dir
-                # user_input = self.owner.get_system_dir(self.messages)
+                    self.messages.add_user_text(user_input)
 
-                self.done = False
+                response = client.chat.completions.create(
+                    model=self.MODEL,
+                    messages=self.messages.get_messages_for_api(),
+                    tools=functions,
+                    tool_choice="auto",
+                    parallel_tool_calls=False
+                )
+                
+                print(response)
+                print(response.choices[0].message.content)
+                
+                if response.choices[0].message.content and len(response.choices[0].message.content.strip()) > 0:
+                    self.messages.add_assistant_text(response.choices[0].message.content)
 
-                print(f"System: {user_input}")
-                print(f"Num tokens (approx.): {avg_tokens(user_input)}")
+                if response.choices[0].message.tool_calls:
+                    for tool_call in response.choices[0].message.tool_calls:
+                        function_name = tool_call.function.name
+                        print(f"Function call: {function_name}")
+                        function_args = json.loads(tool_call.function.arguments)
 
-                if self.VISION == False:
-                    self.messages.append({'role':'user', 'content': user_input})
+                        result = tool_dict[function_name](**function_args)
+                        print(f"Result: {result}")
+
+                        self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
+                        self.messages.add_tool_response(tool_call.id, result) 
                 else:
-                    self.driver.save_screenshot("browser.png")
-                    with open("browser.png", "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode('utf-8')
-                    self.messages.append({
-                        'role': 'user', 
-                        'content': [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}", "detail": "high"}},
-                            {"type": "text", "text": user_input}
-                        ]
-                    })
-            else:
-                if self.VISION:
-                    self.driver.save_screenshot("browser.png")
-                    with open("browser.png", "rb") as image_file:
-                        encoded = base64.b64encode(image_file.read()).decode('utf-8')
-                    self.messages.append({
-                        'role': 'user', 
-                        'content': [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}", "detail": "high"}},
-                            {"type": "text", "text": "Browser window screenshot for context."}
-                        ]
-                    })
-                print("Continuing...")
-                self.messages.append({'role':'user', 'content': "Okay, keep going."})
+                    self.done = True
 
-            # Keep only the last MAX_MESSAGES number of conversations, including the system prompt
-            if len(self.messages) > self.MAX_MESSAGES + 2:
-                self.messages = [self.messages[0]] + [self.messages[1]] + self.messages[-self.MAX_MESSAGES:]
+                last_time = curr_time
+                curr_time = time.time()
+                elapsed_time = curr_time - last_time
+                print(f"Elapsed: {elapsed_time:.2f}s")
+                
+                if user_input.lower() == 'quit':
+                    break
+            
+                self.messages.trim_history(max_messages=self.MAX_MESSAGES)
 
-            # Iterate in reverse to find and replace old HTML content tool calls
-            found_html_content = False
-            for i in range(len(self.messages) - 1, -1, -1):
-                if 'HTML ELEMENTS' in self.messages[i].get('content', ''):
-                    if found_html_content:
-                        self.messages[i]['content'] = '***HTML ELEMENTS (OLD)***'
-                    else:
-                        found_html_content = True
-            # print(self.messages)
-            response = client.chat.completions.create(
-                model=self.MODEL,
-                messages=self.messages,
-                tools=functions,
-                tool_choice="auto"                
-            )
-            print(response)
-            print(response.choices[0].message.content)
-            if response.choices[0].message.content and len(response.choices[0].message.content.strip()) > 0:
-                self.messages.append({'role':'assistant', 'content': response.choices[0].message.content})
-
-            if response.choices[0].message.tool_calls:
-                for tool_call in response.choices[0].message.tool_calls:
-                    # Get the tool function name and arguments Grok wants to call
-                    function_name = tool_call.function.name
-                    print(f"Function call: {function_name}")
-                    function_args = json.loads(tool_call.function.arguments)
-
-                    if self.api == "openai":
-                        self.messages.append(
-                            {
-                                'role': 'assistant', 
-                                'tool_calls': [{'id': tool_call.id, 'function': {'arguments': tool_call.function.arguments, 'name': function_name}, 'type':'function'}]
-                            }
-                        )
-
-                    # Call one of the tool function defined earlier with arguments
-                    result = tool_dict[function_name](**function_args)
-                    print(f"Result: {result}")
-
-                    # Append the result from tool function call to the chat message history,
-                    # with "role": "tool" to indicate that it is a tool response
-                    self.messages.append(
-                        {
-                            "role": "tool",
-                            "content": json.dumps(result),
-                            "tool_call_id": tool_call.id  # tool_call.id supplied in Grok's response
-                        }
-                    )
-            else:
-                self.done = True
-
-            last_time = curr_time
-            curr_time = time.time()
-            elapsed_time = curr_time - last_time
-            print(f"Elapsed: {elapsed_time:.2f}s")
-            if user_input.lower() == 'quit':
-                break
-
-        self.driver.quit()
+        finally:
+            # Clean up Playwright resources
+            self.context.close()
+            self.browser.close()
+            self.playwright.stop()
