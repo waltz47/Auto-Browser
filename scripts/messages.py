@@ -49,7 +49,7 @@ class Message:
         """Create a tool call message."""
         return Message(
             role=role,
-            content="",  # Content is empty for tool calls
+            content=None,  # Content should be None for tool calls
             tool_calls=[{
                 'id': tool_id,
                 'function': {
@@ -92,8 +92,11 @@ class Message:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert message to dictionary format for API calls."""
-        message_dict = {"role": self.role, "content": self.content}
+        message_dict = {"role": self.role}
         
+        if self.content is not None:
+            message_dict["content"] = self.content
+            
         if self.tool_call_id:
             message_dict["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
@@ -199,7 +202,7 @@ class MessageHistory:
             # Keep system message (index 0) and last max_messages
             self.messages = [self.messages[0]] + self.messages[-max_messages:]
 
-        # print(self.messages)
+        print(self.messages)
 
             
     def __len__(self) -> int:

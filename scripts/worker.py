@@ -19,7 +19,7 @@ class Worker:
         self.context = self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             locale="en-US",
-            viewport=None
+            viewport={"width": 1920, "height": 1080}
         )
         self.page = self.context.new_page()
         self.active_element = None
@@ -31,7 +31,7 @@ Here are the tools provided to you:
 - get_url_contents: Get the contents from the active page. Required when a new url is opened or changes are made to the page.
 - set_active_element: Set a HTML page element as active via an xpath selector.
 - send_keys_to_active_element: Send keys to page HTML element (for eg. to input text).
-- submit: Submit the active HTML element (for eg. to submit a form).
+- submit: Submit the active HTML element (for eg. to submit an input form).
 - click_active_element: Click active HTML element.
 - highlight_active_element: Highlight active HTML element.
 
@@ -247,6 +247,9 @@ Actions:
                     print(f"System: {user_input}")
 
                     self.messages.add_user_text(user_input)
+                else:
+                    self.page.screenshot(path='browser.png', full_page=False)
+                    self.messages.add_user_with_image("Browser snapshot", "browser.png")
 
                 response = client.chat.completions.create(
                     model=self.MODEL,
@@ -284,7 +287,7 @@ Actions:
                 if user_input.lower() == 'quit':
                     break
             
-                self.messages.trim_history(max_messages=self.MAX_MESSAGES)
+                # self.messages.trim_history(max_messages=self.MAX_MESSAGES)
 
         finally:
             # Clean up Playwright resources
