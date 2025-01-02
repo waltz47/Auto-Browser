@@ -52,6 +52,7 @@ Actions:
     def move_to_url(self, url):
         try:
             self.page.goto(url, wait_until="networkidle")
+            time.sleep(2)
             return f"Current page set to {url}. Use `get_url_contents` to get the contents of the page."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
@@ -71,7 +72,8 @@ Actions:
             main_content = get_main_content(self.page)
             
             # Combine all information
-            return f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***"
+            summarized = self.summarize(f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***")
+            return summarized
             
         except Exception as e:
             print(f"Error getting page contents: {e}")
@@ -212,6 +214,31 @@ Actions:
             print("Stack trace:", traceback.format_exc())
             return error_message
 
+    def summarize(self, json_str: str):
+        prompt = """Extract the important element from the given json text. Do not print any other text.
+The following elements must be extracted:
+- Input fields
+- Links (Along with the href link)
+- Clickable Buttons
+- Dropdowns
+- Raw Text Information
+- Other information that you think is important (such as pop-ups, alerts, etc.)
+
+You will also have the image snapshot of the page."""
+        messages = MessageHistory(prompt)
+        self.page.screenshot(path='browser.png', full_page=False)
+        messages.add_user_with_image(json_str, "browser.png")
+        # messages.add_user_text(json_str)
+        response = self.client.chat.completions.create(
+            model=self.MODEL,
+            messages=messages.get_messages_for_api(),
+            tools=functions,
+            tool_choice="auto",
+            parallel_tool_calls=False
+        )
+        print(f"Summary:{response.choices[0].message.content}")
+        return response.choices[0].message.content
+
     def run(self):
         tool_dict = {
             "move_to_url": self.move_to_url,
@@ -229,13 +256,18 @@ Actions:
             sys.exit(1)
 
         if self.api == "openai":
-            client = OpenAI()
-        else:
-            client = OpenAI(
+            self.client = OpenAI()
+        elif self.api == "xai":
+            self.client = OpenAI(
                 api_key=api_key,
                 base_url="https://api.x.ai/v1"
             )
-
+        elif self.api == "ollama":
+            self.client = OpenAI(
+                api_key="____",
+                base_url='http://localhost:11434/v1'
+            )
+            
         last_time = time.time()
 
         try:
@@ -248,11 +280,14 @@ Actions:
                     print(f"System: {user_input}")
 
                     self.messages.add_user_text(user_input)
-                else:
-                    self.page.screenshot(path='browser.png', full_page=False)
-                    self.messages.add_user_with_image("Browser snapshot", "browser.png")
+                # else:
+                    # self.messages.add_user_text("Okay, keep going.")
+                    # self.page.screenshot(path='browser.png', full_page=False)
+                    # self.messages.add_user_with_image("Browser snapshot", "browser.png")
 
-                response = client.chat.completions.create(
+                # print(self.messages.get_messages_for_api())
+
+                response = self.client.chat.completions.create(
                     model=self.MODEL,
                     messages=self.messages.get_messages_for_api(),
                     tools=functions,
@@ -276,7 +311,8 @@ Actions:
                         print(f"Result: {result}")
 
                         self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
-                        self.messages.add_tool_response(tool_call.id, result) 
+                        self.messages.add_tool_response(tool_call.id, result, function_name) 
+                        break
                 else:
                     self.done = True
 

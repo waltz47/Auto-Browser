@@ -12,6 +12,7 @@ class Message:
     role: str
     content: Union[str, List[Dict[str, Any]], Dict[str, Any]]
     tool_call_id: Optional[str] = None
+    name: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     
     @staticmethod
@@ -61,12 +62,13 @@ class Message:
         )
     
     @staticmethod
-    def create_tool_response(tool_id: str, result: str) -> 'Message':
+    def create_tool_response(tool_id: str, result: str, name: str) -> 'Message':
         """Create a tool response message."""
         return Message(
             role="tool",
             content=result,
-            tool_call_id=tool_id
+            tool_call_id=tool_id,
+            name=name #for ollama tool calling
         )
     
     def __str__(self) -> str:
@@ -99,6 +101,7 @@ class Message:
             
         if self.tool_call_id:
             message_dict["tool_call_id"] = self.tool_call_id
+            message_dict["name"] = self.name
         if self.tool_calls:
             message_dict["tool_calls"] = self.tool_calls
             
@@ -165,9 +168,9 @@ class MessageHistory:
         """Add a tool call message."""
         self.add_message(Message.create_tool_call("assistant", tool_id, function_name, arguments))
         
-    def add_tool_response(self, tool_id: str, result: str) -> None:
+    def add_tool_response(self, tool_id: str, result: str, name: str) -> None:
         """Add a tool response message."""
-        self.add_message(Message.create_tool_response(tool_id, result))
+        self.add_message(Message.create_tool_response(tool_id, result, name))
         
     def get_messages_for_api(self) -> List[Dict[str, Any]]:
         """Get messages in format suitable for API calls."""

@@ -54,7 +54,8 @@ def get_page_elements(page: Page) -> str:
     #add later if needed
     #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
     #disabled: element.disabled || false,
-    
+    # ignored_tags = ["div", "span", "td", "label", "button"]
+    ignored_tags = []
     for element in elements:
         try:
             # Get element info using the JavaScript function
@@ -75,6 +76,12 @@ def get_page_elements(page: Page) -> str:
             # Skip hidden elements
             if not element_info.get('isVisible', True):
                 continue
+
+            if element_info.get("tag") in ignored_tags:
+                continue
+
+            # if "button" in element_info.get("tag"):
+            #     continue
             
             structured_elements.append(element_info)
             
@@ -170,34 +177,3 @@ def get_main_content(page: Page) -> str:
     
     main_content = page.evaluate(js_main_content)
     return main_content
-
-def get_url_contents(page: Page) -> str:
-    """
-    Get all page contents in a structured format.
-    """
-    try:
-        # Get page elements
-        elements_info = get_page_elements(page)
-        
-        # Get focused element
-        focused = get_focused_element_info(page)
-        
-        # Get main content
-        main_content = get_main_content(page)
-        
-        # Format the complete response
-        response = {
-            "page_elements": json.loads(elements_info),
-            "focused_element": focused,
-            "main_content": main_content
-        }
-        
-        return "***PAGE JSON***" + json.dumps(response, indent=2, ensure_ascii=False) + "***END OF PAGE JSON***"
-        
-    except Exception as e:
-        print(f"Error getting page contents: {e}")
-        traceback.print_exc()
-        return json.dumps({
-            "error": str(e),
-            "type": "error"
-        }, indent=2)
