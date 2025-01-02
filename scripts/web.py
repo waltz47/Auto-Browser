@@ -46,12 +46,14 @@ def get_page_elements(page: Page) -> str:
             ariaLabel: element.getAttribute('aria-label') || undefined,
             role: element.getAttribute('role') || undefined,
             text: (element.innerText || '').substring(0, 500),
-            isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
-            disabled: element.disabled || false,
             classes: element.className || undefined
         };
     }
     """.replace('\n', ' ').strip()
+
+    #add later if needed
+    #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
+    #disabled: element.disabled || false,
     
     for element in elements:
         try:

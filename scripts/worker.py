@@ -52,7 +52,7 @@ Actions:
     def move_to_url(self, url):
         try:
             self.page.goto(url, wait_until="networkidle")
-            return f"Current page set to {url}. Use get_url_contents to get the contents of the page."
+            return f"Current page set to {url}. Use `get_url_contents` to get the contents of the page."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
 
@@ -125,7 +125,8 @@ Actions:
             if self.active_element is None:
                 return "Element not found. Invalid xpath selector. Recheck the arguments."
             else:
-                self.highlight_active_element()
+                self.active_element.scroll_into_view_if_needed()
+                self.highlight_active_element('red', 30000)
             # return f"Active element updated to element of class: {locator_value}"
             return "Active element updated."
         except Exception as e:
@@ -140,12 +141,12 @@ Actions:
                 return f"Error sending keys to element: {str(e)}"
         return "Invalid active element. Set the active HTML element first."
 
-    def highlight_active_element(self, highlight_color='red', duration=30000):
+    def highlight_active_element(self, highlight_color='red', duration=3000):
         """
         Creates a bounding box around the active element temporarily using Playwright's API.
 
         :param highlight_color: Color to use for the bounding box (default: red)
-        :param duration: Duration in milliseconds for which the box should stay (default: 30000ms)
+        :param duration: Duration in milliseconds for which the box should stay (default: 3000ms)
         """
         try:
             # Get the bounding box of the active element

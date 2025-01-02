@@ -18,7 +18,7 @@ class Nyx:
     # MODEL = "grok-2-vision-1212"
     MODEL="gpt-4o"
     VISION=False #for grok-2-vision
-    MAX_MESSAGES=20
+    MAX_MESSAGES=15
 
     def __init__(self):
         self.messages = [
