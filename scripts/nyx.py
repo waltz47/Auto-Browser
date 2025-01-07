@@ -17,7 +17,7 @@ class Nyx:
 
     def __init__(self):
         self.api = "openai"
-        # self.MODEL="llama3.1:latest"
+        # self.MODEL="smallthinker"
         self.MODEL="gpt-4o"
         self.MAX_MESSAGES = 25
 

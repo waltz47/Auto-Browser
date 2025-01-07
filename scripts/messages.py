@@ -34,7 +34,7 @@ class Message:
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/png;base64,{encoded}",
+                    "url": f"data:image/jpeg;base64,{encoded}",
                     "detail": detail
                 }
             },

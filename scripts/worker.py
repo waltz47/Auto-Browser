@@ -19,7 +19,8 @@ class Worker:
         self.context = self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             locale="en-US",
-            viewport={"width": 1920, "height": 1080}
+            viewport={"width": 1920, "height": 1080},
+            permissions=["geolocation"]
         )
         self.page = self.context.new_page()
         self.active_element = None
@@ -48,6 +49,8 @@ Actions:
 - Read the contents and output the answer to the question.'''
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
+        self.prev_content = ""
+        self.prev_summarized = ""
 
     def move_to_url(self, url):
         try:
@@ -57,27 +60,98 @@ Actions:
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
 
+
     def get_url_contents(self):
-        """
-        Get a clean, structured representation of the page contents.
-        """
+        """Get clean, structured representation of page contents."""
         try:
-            # Get important page elements
             elements_info = get_page_elements(self.page)
+            # elements_info = self.page.evaluate("""() => {
+            #     setTimeout(() => {
+            #         const overlays = document.querySelectorAll('div[style*="border: 2px dashed blue"]');
+            #         overlays.forEach(overlay => overlay.remove());
+            #     }, 8000); // 8 second timeout to remove overlays
+            #     const getElements = () => {
+            #         const elements = {
+            #             inputs: [...document.querySelectorAll("input, textarea")],
+            #             buttons: [...document.querySelectorAll("button, [role='button']")],
+            #             links: [...document.querySelectorAll("a")]
+            #         };
+                    
+            #         const result = {elements: {}};
+            #         let counter = 1;
+                    
+            #         for (const [key, elemList] of Object.entries(elements)) {
+            #             result.elements[key] = elemList.map(elem => {
+            #                 const box = elem.getBoundingClientRect();
+            #                 const info = {
+            #                     tag: elem.tagName.toLowerCase(),
+            #                     type: elem.type,
+            #                     id: elem.id,
+            #                     name: elem.name,
+            #                     value: elem.value,
+            #                     ariaLabel: elem.getAttribute('aria-label'),
+            #                     role: elem.getAttribute('role'),
+            #                     text: elem.innerText,
+            #                     classes: elem.className,
+            #                     elementNumber: counter,
+            #                     /*bbox: {
+            #                         x: box.x,
+            #                         y: box.y,
+            #                         width: box.width,
+            #                         height: box.height
+            #                     }*/
+            #                 };
+                            
+            #                 const overlay = document.createElement('div');
+            #                 overlay.style.cssText = `
+            #                     position: fixed;
+            #                     border: 2px dashed blue;
+            #                     left: ${box.x}px;
+            #                     top: ${box.y}px;
+            #                     width: ${box.width}px;
+            #                     height: ${box.height}px;
+            #                     pointer-events: none;
+            #                     z-index: 10000;
+            #                 `;
+                            
+            #                 const num = document.createElement('div');
+            #                 num.textContent = counter++;
+            #                 num.style.cssText = `
+            #                     position: absolute;
+            #                     left: -20px;
+            #                     top: -20px;
+            #                     background: red;
+            #                     color: white;
+            #                     border-radius: 50%;
+            #                     padding: 2px 6px;
+            #                     font-size: 25px;
+            #                 `;
+                            
+            #                 //overlay.appendChild(num);
+            #                 document.body.appendChild(overlay);
+                            
+            #                 return info;
+            #             });
+            #         }
+            #         return result;
+            #     };
+            #     return getElements();
+            # }""")
             
-            # Get focused element (if any)
             focused = get_focused_element_info(self.page)
-            
-            # Get main content
             main_content = get_main_content(self.page)
             
-            # Combine all information
-            summarized = self.summarize(f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***")
+            data = f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***"
+
+            self.prev_content = data
+            summarized = self.summarize(data)
+            self.prev_summarized = summarized
+
+            open("last.log","w",encoding='utf-8').write(data)
             return summarized
-            
         except Exception as e:
-            print(f"Error getting page contents: {e}")
-            return f"Error analyzing page: {str(e)}"
+            print("Error getting Page contents:", e)
+            assert(0)
 
     def find_element_by(self, locator_type, locator_value, input_type=None):
         try:
@@ -128,7 +202,7 @@ Actions:
                 return "Element not found. Invalid xpath selector. Recheck the arguments."
             else:
                 self.active_element.scroll_into_view_if_needed()
-                self.highlight_active_element('red', 30000)
+                self.highlight_active_element('black', 30000)
             # return f"Active element updated to element of class: {locator_value}"
             return "Active element updated."
         except Exception as e:
@@ -137,17 +211,24 @@ Actions:
     def send_keys_to_active_element(self, keys: str):
         if self.active_element:
             try:
-                self.active_element.fill(keys)
-                return "Keys sent to active element"
+                self.active_element.focus()
+                appended = ""
+                for key in  keys:
+                    appended += key
+                    self.active_element.fill(appended)
+                    time.sleep(0.05)
+                    
+                time.sleep(3) #for dropdowns
+                return f"Keys sent to active element. Page Contents: {self.get_url_contents()}"
             except Exception as e:
                 return f"Error sending keys to element: {str(e)}"
         return "Invalid active element. Set the active HTML element first."
 
-    def highlight_active_element(self, highlight_color='red', duration=3000):
+    def highlight_active_element(self, highlight_color='black', duration=3000):
         """
         Creates a bounding box around the active element temporarily using Playwright's API.
 
-        :param highlight_color: Color to use for the bounding box (default: red)
+        :param highlight_color: Color to use for the bounding box (default: black)
         :param duration: Duration in milliseconds for which the box should stay (default: 3000ms)
         """
         try:
@@ -188,6 +269,7 @@ Actions:
         return "Highlighted active element"
 
     def call_submit(self):
+        """ Calls submit on the active element. """
         try:
             if self.active_element:
                 # In Playwright, we can either press Enter or submit the form
@@ -202,6 +284,7 @@ Actions:
             return f"Error submitting form: {str(e)}"
 
     def click_active_element(self):
+        """ Clicks on the active element. """
         try:
             if self.active_element:
                 self.active_element.scroll_into_view_if_needed()
@@ -215,31 +298,31 @@ Actions:
             return error_message
 
     def summarize(self, json_str: str):
-        prompt = """Extract the important element from the given json text. Do not print any other text.
-The following elements must be extracted:
-- Input fields
-- Links (Along with the href link)
-- Clickable Buttons
-- Dropdowns
-- Raw Text Information
-- Other information that you think is important (such as pop-ups, alerts, etc.)
 
-You will also have the image snapshot of the page."""
+        """Summarize the given json (html). (Mostly to save tokens)"""
+
+        prompt = """You are a helpful assistant designed to extract relevant json data from a webpage HTML.
+1. Extract the relevant elements from the json as concisely as possible. Do not print any other text.
+2. Include all the attributes for the elements. This includes ids, classes, links and any other tag.
+3. Extract import text.
+4. Remove unnecessary elements such as ad-campaigns.
+5. You will also be provided with the snapshot of the webpage. Use this information to summarize the data."""
         messages = MessageHistory(prompt)
-        self.page.screenshot(path='browser.png', full_page=False)
-        messages.add_user_with_image(json_str, "browser.png")
+        self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=100)
+        if self.api != "ollama":
+            messages.add_user_with_image(json_str, "browser.jpeg")
+        else:
+            messages.add_user_text(json_str)
         # messages.add_user_text(json_str)
         response = self.client.chat.completions.create(
             model=self.MODEL,
             messages=messages.get_messages_for_api(),
-            tools=functions,
-            tool_choice="auto",
-            parallel_tool_calls=False
         )
         print(f"Summary:{response.choices[0].message.content}")
         return response.choices[0].message.content
 
     def run(self):
+        """Main Worker Loop"""
         tool_dict = {
             "move_to_url": self.move_to_url,
             "get_url_contents": self.get_url_contents,
@@ -251,7 +334,7 @@ You will also have the image snapshot of the page."""
         }
         
         api_key = os.environ.get('XAI_API_KEY')
-        if api_key is None and self.api != "openai":
+        if api_key is None and self.api == "xai":
             print("XAI_API_KEY environment variable not set.")
             sys.exit(1)
 
@@ -304,7 +387,7 @@ You will also have the image snapshot of the page."""
                 if response.choices[0].message.tool_calls:
                     for tool_call in response.choices[0].message.tool_calls:
                         function_name = tool_call.function.name
-                        print(f"Function call: {function_name}")
+                        print(f"Call: {function_name}")
                         function_args = json.loads(tool_call.function.arguments)
 
                         result = tool_dict[function_name](**function_args)
