@@ -49,13 +49,12 @@ Actions:
 - Read the contents and output the answer to the question.'''
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
-        self.prev_content = ""
-        self.prev_summarized = ""
+        self.prev_state = ""
 
     def move_to_url(self, url):
         try:
             self.page.goto(url, wait_until="networkidle")
-            time.sleep(2)
+            time.sleep(1)
             return f"Current page set to {url}. Use `get_url_contents` to get the contents of the page."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
@@ -64,6 +63,7 @@ Actions:
     def get_url_contents(self):
         """Get clean, structured representation of page contents."""
         try:
+            self.page.wait_for_load_state(state="networkidle")
             elements_info = get_page_elements(self.page)
             # elements_info = self.page.evaluate("""() => {
             #     setTimeout(() => {
@@ -142,10 +142,9 @@ Actions:
             main_content = get_main_content(self.page)
             
             data = f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***"
-
-            self.prev_content = data
+            
+            self.prev_state = elements_info
             summarized = self.summarize(data)
-            self.prev_summarized = summarized
 
             open("last.log","w",encoding='utf-8').write(data)
             return summarized
@@ -191,18 +190,28 @@ Actions:
             
         return selectors[locator_type.lower()]
 
-    # def set_active_element(self, locator_type: str, locator_value: str):
     def set_active_element(self, xpath_selector: str):
-        # print(f"Getting element with type: {locator_type} and class: {locator_value}")
+        error_msg = """Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."""
+
         print(f"Getting element with xpath selector: {xpath_selector}")
         try:
-            # self.active_element = self.find_element_by(locator_type, locator_value)
-            self.active_element = self.page.query_selector(xpath_selector)
+            # self.active_element = self.page.query_selector(xpath_selector)
+            selector = f"xpath={xpath_selector}"
+            count = self.page.locator(selector).count()
+
+            if count == 0:
+                return error_msg
+
+            self.active_element = self.page.locator(selector)
+            print(f"Focused: {self.active_element}")
             if self.active_element is None:
-                return "Element not found. Invalid xpath selector. Recheck the arguments."
+                return error_msg
             else:
-                self.active_element.scroll_into_view_if_needed()
-                self.highlight_active_element('black', 30000)
+                try:
+                    self.active_element.scroll_into_view_if_needed()
+                except:
+                    pass
+                self.highlight_active_element('black', 5000)
             # return f"Active element updated to element of class: {locator_value}"
             return "Active element updated."
         except Exception as e:
@@ -210,15 +219,13 @@ Actions:
 
     def send_keys_to_active_element(self, keys: str):
         if self.active_element:
+            if self.active_element.is_visible() == False:
+                return "Active element is currently not visible."
+
             try:
                 self.active_element.focus()
-                appended = ""
-                for key in  keys:
-                    appended += key
-                    self.active_element.fill(appended)
-                    time.sleep(0.05)
-                    
-                time.sleep(3) #for dropdowns
+                self.active_element.type(keys, delay=50)
+                time.sleep(2)  
                 return f"Keys sent to active element. Page Contents: {self.get_url_contents()}"
             except Exception as e:
                 return f"Error sending keys to element: {str(e)}"
@@ -287,10 +294,14 @@ Actions:
         """ Clicks on the active element. """
         try:
             if self.active_element:
-                self.active_element.scroll_into_view_if_needed()
-                self.active_element.click()
-                return "Successfully called click on active element"
-            return "No active element to click"
+                try:
+                    self.active_element.scroll_into_view_if_needed(timeout=2000)
+                except:
+                    pass
+                self.active_element.click(force=True)
+                time.sleep(2)
+                return "Clicked element."
+            return "Element is invalid. Ensure that a correct HTML element is selected."
         except Exception as e:
             error_message = f"Error clicking element: {str(e)}"
             print(error_message)
@@ -303,12 +314,11 @@ Actions:
 
         prompt = """You are a helpful assistant designed to extract relevant json data from a webpage HTML.
 1. Extract the relevant elements from the json as concisely as possible. Do not print any other text.
-2. Include all the attributes for the elements. This includes ids, classes, links and any other tag.
-3. Extract import text.
-4. Remove unnecessary elements such as ad-campaigns.
-5. You will also be provided with the snapshot of the webpage. Use this information to summarize the data."""
+2. Include all the attributes for the elements. This includes ids, classes, links and other tags.
+3. Extract important text.
+4. You will also be provided with the snapshot of the webpage. Use this information to summarize the data."""
         messages = MessageHistory(prompt)
-        self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=100)
+        self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=50)
         if self.api != "ollama":
             messages.add_user_with_image(json_str, "browser.jpeg")
         else:
@@ -360,13 +370,17 @@ Actions:
                 if self.done:
                     user_input = input("Enter:")
                     self.done = False
-                    print(f"System: {user_input}")
+                    # print(f"System: {user_input}")
 
                     self.messages.add_user_text(user_input)
                 # else:
-                    # self.messages.add_user_text("Okay, keep going.")
-                    # self.page.screenshot(path='browser.png', full_page=False)
-                    # self.messages.add_user_with_image("Browser snapshot", "browser.png")
+                #     # self.messages.add_user_text("Okay, keep going.")
+                #     self.page.screenshot(path='browser.jpeg',type="jpeg", full_page=False)
+                #     self.messages.add_user_with_image("Browser snapshot", "browser.jpeg")
+                    # if get_page_elements(self.page) == self.prev_state:
+                    #     pass
+                    # else:
+                    #     self.messages.add_user_text(self.get_url_contents())
 
                 # print(self.messages.get_messages_for_api())
 

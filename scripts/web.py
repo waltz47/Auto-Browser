@@ -13,7 +13,7 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        # "h1", "h2", "h3", 
+        "h1", "h2", "h3", 
         "form", 
         # "label",
          "table", "ul", "ol", "nav",
@@ -114,7 +114,7 @@ def get_page_elements(page: Page) -> str:
         elif tag == 'nav' or (element.get('classes', '').find('nav') != -1):
             grouped_elements["navigation"].append(element)
         # else:
-            # grouped_elements["other"].append(element)
+        #     grouped_elements["other"].append(element)
     
     # Remove empty categories
     grouped_elements = {k: v for k, v in grouped_elements.items() if v}
