@@ -13,7 +13,7 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        "h1", "h2", "h3", 
+        # "h1", "h2", "h3", 
         "form", 
         # "label",
          "table", "ul", "ol", "nav",
@@ -25,9 +25,13 @@ def get_page_elements(page: Page) -> str:
     
     # Combine all selectors
     combined_selector = ", ".join(important_selectors)
-    
+
     # Get elements matching our selectors
     elements = page.query_selector_all(combined_selector)
+
+    print(f"time (query selector): {time.time() - time_start}")
+    time_start = time.time()
+
     structured_elements: List[Dict[str, Any]] = []
     
     # JavaScript function as a single line with proper escaping
@@ -45,17 +49,21 @@ def get_page_elements(page: Page) -> str:
             placeholder: element.placeholder || undefined,
             ariaLabel: element.getAttribute('aria-label') || undefined,
             role: element.getAttribute('role') || undefined,
-            text: (element.innerText || '').substring(0, 500),
-            classes: element.className || undefined
+            text: (element.innerText || '').substring(0, 200),
+            isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
+            disabled: element.disabled || false
         };
     }
     """.replace('\n', ' ').strip()
 
     #add later if needed
     #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
-    #disabled: element.disabled || false,
-    # ignored_tags = ["div", "span", "td", "label", "button"]
-    ignored_tags = []
+    #classes: element.className || undefined,
+
+    ignored_tags = ["span"] #ignore all these tags
+    ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
+    MAX_LINKS = 20 #max num of a tags
+
     for element in elements:
         try:
             # Get element info using the JavaScript function
@@ -80,15 +88,34 @@ def get_page_elements(page: Page) -> str:
             if element_info.get("tag") in ignored_tags:
                 continue
 
-            # if "button" in element_info.get("tag"):
-            #     continue
+            if element_info.get("tag") == "a":
+                if MAX_LINKS == 0:
+                    continue
+                if element_info.get("href") == None:
+                    continue
+                
+                ignored = False
+                #ignored hrefs
+                for ignored_href in ignored_href_strings:
+                    if ignored_href in element_info.get("href"):
+                        ignored = True
+                        break
+                if ignored:
+                    continue
+                MAX_LINKS -= 1
+
+            element_info.pop("disabled", None)
+            element_info.pop("isVisible", None)
             
             structured_elements.append(element_info)
             
         except Exception as e:
             print(f"Error processing element: {e}")
             continue
-    
+
+    print(f"time (element iterator): {time.time() - time_start}")
+    time_start = time.time()
+
     # Group elements by type
     grouped_elements = {
         "inputs": [],
@@ -129,6 +156,8 @@ def get_page_elements(page: Page) -> str:
         "processing_time": f"{time.time() - time_start:.2f}s",
         "elements": grouped_elements
     }
+    print(f"time (group iterator): {time.time() - time_start}")
+    time_start = time.time()
     
     return json.dumps(summary, indent=2, ensure_ascii=False)
 
@@ -136,6 +165,8 @@ def get_focused_element_info(page: Page) -> Dict[str, Any]:
     """
     Get information about the currently focused element.
     """
+
+    time_start = time.time()
     js_focused = """
     () => {
         const active = document.activeElement;
@@ -153,12 +184,16 @@ def get_focused_element_info(page: Page) -> Dict[str, Any]:
     """.replace('\n', ' ').strip()
     
     focused = page.evaluate(js_focused)
+    print(f"time (focused element): {time.time() - time_start}")
     return focused if focused else {"info": "No element currently focused"}
 
 def get_main_content(page: Page) -> str:
     """
     Extract the main content of the page.
     """
+
+    time_start = time.time()
+
     js_main_content = """
     () => {
         const mainSelectors = ['main', '[role="main"]', '#main-content', '#content', 'article', '.main-content'];
@@ -176,4 +211,5 @@ def get_main_content(page: Page) -> str:
     """.replace('\n', ' ').strip()
     
     main_content = page.evaluate(js_main_content)
+    print(f"time (main page): {time.time() - time_start}")
     return main_content

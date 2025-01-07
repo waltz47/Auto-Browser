@@ -18,8 +18,8 @@ class Nyx:
     def __init__(self):
         self.api = "openai"
         # self.MODEL="smallthinker"
-        self.MODEL="gpt-4o-mini"
-        self.MAX_MESSAGES = 25
+        self.MODEL="gpt-4o"
+        self.MAX_MESSAGES = 50
 
     def start(self):
         worker = Worker()

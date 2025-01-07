@@ -180,32 +180,24 @@ class MessageHistory:
         """Trim message history to keep only recent messages if exceeding max length,
         preserving only the last occurrence of special JSON markers."""
         import re
-
-        # Replace JSON content in all but the last occurrence
-        json_pattern = r'\*\*\*PAGE JSON\*\*\*.*?\*\*\*END OF PAGE JSON\*\*\*'
         
         # Find all messages containing JSON markers
         json_messages = []
         for i, msg in enumerate(self.messages):
-            if isinstance(msg.content, str) and "***PAGE JSON***" in msg.content and "***END OF PAGE JSON***" in msg.content:
+            if isinstance(msg.content, str) and "```json" in msg.content:
                 json_messages.append(i)
         
-        # Replace content in all but the last occurrence
-        if len(json_messages) > 1:
-            for i in json_messages[:-1]:
-                self.messages[i].content = re.sub(
-                    json_pattern,
-                    '***PAGE JSON*** <stale> ***END OF PAGE JSON***',
-                    self.messages[i].content,
-                    flags=re.DOTALL
-                )
+        # Replace content in all but the last 2 occurrences
+        if len(json_messages) > 2:
+            for i in json_messages[:-2]:
+                self.messages[i].content = "Stale page summary"
 
         # Truncate history if it exceeds max_messages
         if len(self.messages) > max_messages + 2:
             # Keep system message (index 0) and last max_messages
             self.messages = [self.messages[0]] + self.messages[-max_messages:]
 
-        print(self.messages)
+        # print(self.messages)
 
             
     def __len__(self) -> int:

@@ -19,7 +19,7 @@ class Worker:
         self.context = self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             locale="en-US",
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 1280, "height": 768},
             permissions=["geolocation"]
         )
         self.page = self.context.new_page()
@@ -30,22 +30,23 @@ class Worker:
 Here are the tools provided to you:
 - move_to_url: Set a specific url as the active page.
 - get_url_contents: Get the contents from the active page. Required when a new url is opened or changes are made to the page.
-- set_active_element: Set a HTML page element as active via an xpath selector.
-- send_keys_to_active_element: Send keys to page HTML element (for eg. to input text).
-- submit: Submit the active HTML element (for eg. to submit an input form).
-- click_active_element: Click active HTML element.
-- highlight_active_element: Highlight active HTML element.
+- send_keys_to_element: Send keys to page HTML element (for eg. to input text). Requires the xpath selector.
+- submit: Submit the HTML element (for eg. to submit an input form). Requires the xpath selector.
+- click_element: Click HTML element. Requires the xpath selector.
+- highlight_element: Highlight HTML element. Requires the xpath selector.
+
+When passing the xpathSelector argument, pass the xpath selector via tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. When using `contains`, ensure that the heirarchy for the element may be missing and text may be in a child element.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
 Actions:    
 - Open the Google homepage (move_to_url)
 - Get the HTML contents of the page (get_url_contents)
-- Set the search bar as the active element (set_active_element)
-- Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_active_element)
+- Set the search bar as the active element (set_element)
+- Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_element)
 - Call submit on the search bar (call_submit). This will take you to the search results page.
 - Get the HTML contents of the page (get_url_contents)
-- Open the page that is more likely to have the answer (move_to_url/ set_active_element/ click_active_element)
+- Open the page that is more likely to have the answer (move_to_url/ set_element/ click_element)
 - Read the contents and output the answer to the question.'''
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
@@ -53,8 +54,8 @@ Actions:
 
     def move_to_url(self, url):
         try:
-            self.page.goto(url, wait_until="networkidle")
-            time.sleep(1)
+            self.page.goto(url, wait_until="domcontentloaded")
+            time.sleep(3)
             return f"Current page set to {url}. Use `get_url_contents` to get the contents of the page."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
@@ -62,92 +63,29 @@ Actions:
 
     def get_url_contents(self):
         """Get clean, structured representation of page contents."""
+
+        time_start = time.time()
         try:
-            self.page.wait_for_load_state(state="networkidle")
+            time.sleep(4)
+            self.page.wait_for_load_state(state="domcontentloaded")
+
+            open("page.log", "w", encoding="utf-8").write(self.page.content())
+
             elements_info = get_page_elements(self.page)
-            # elements_info = self.page.evaluate("""() => {
-            #     setTimeout(() => {
-            #         const overlays = document.querySelectorAll('div[style*="border: 2px dashed blue"]');
-            #         overlays.forEach(overlay => overlay.remove());
-            #     }, 8000); // 8 second timeout to remove overlays
-            #     const getElements = () => {
-            #         const elements = {
-            #             inputs: [...document.querySelectorAll("input, textarea")],
-            #             buttons: [...document.querySelectorAll("button, [role='button']")],
-            #             links: [...document.querySelectorAll("a")]
-            #         };
-                    
-            #         const result = {elements: {}};
-            #         let counter = 1;
-                    
-            #         for (const [key, elemList] of Object.entries(elements)) {
-            #             result.elements[key] = elemList.map(elem => {
-            #                 const box = elem.getBoundingClientRect();
-            #                 const info = {
-            #                     tag: elem.tagName.toLowerCase(),
-            #                     type: elem.type,
-            #                     id: elem.id,
-            #                     name: elem.name,
-            #                     value: elem.value,
-            #                     ariaLabel: elem.getAttribute('aria-label'),
-            #                     role: elem.getAttribute('role'),
-            #                     text: elem.innerText,
-            #                     classes: elem.className,
-            #                     elementNumber: counter,
-            #                     /*bbox: {
-            #                         x: box.x,
-            #                         y: box.y,
-            #                         width: box.width,
-            #                         height: box.height
-            #                     }*/
-            #                 };
-                            
-            #                 const overlay = document.createElement('div');
-            #                 overlay.style.cssText = `
-            #                     position: fixed;
-            #                     border: 2px dashed blue;
-            #                     left: ${box.x}px;
-            #                     top: ${box.y}px;
-            #                     width: ${box.width}px;
-            #                     height: ${box.height}px;
-            #                     pointer-events: none;
-            #                     z-index: 10000;
-            #                 `;
-                            
-            #                 const num = document.createElement('div');
-            #                 num.textContent = counter++;
-            #                 num.style.cssText = `
-            #                     position: absolute;
-            #                     left: -20px;
-            #                     top: -20px;
-            #                     background: red;
-            #                     color: white;
-            #                     border-radius: 50%;
-            #                     padding: 2px 6px;
-            #                     font-size: 25px;
-            #                 `;
-                            
-            #                 //overlay.appendChild(num);
-            #                 document.body.appendChild(overlay);
-                            
-            #                 return info;
-            #             });
-            #         }
-            #         return result;
-            #     };
-            #     return getElements();
-            # }""")
             
-            focused = get_focused_element_info(self.page)
+            # focused = get_focused_element_info(self.page)
             main_content = get_main_content(self.page)
             
-            data = f"***PAGE JSON***\n\n{elements_info}\n\nFOCUSED ELEMENT:\n{json.dumps(focused, indent=2)}\n\n{main_content}\n\n ***END OF PAGE JSON***"
-            
+            data = f"***PAGE JSON***\n\n{elements_info}\n\n{main_content}\n\n ***END OF PAGE JSON***"
+
+            print(f"time (get page): {time.time() - time_start}")
+
             self.prev_state = elements_info
-            summarized = self.summarize(data)
+            summarized = "Page Json Summary:\n" + self.summarize(data)
 
             open("last.log","w",encoding='utf-8').write(data)
             return summarized
+
         except Exception as e:
             print("Error getting Page contents:", e)
             assert(0)
@@ -171,67 +109,62 @@ Actions:
             print(f"Error finding element: {e}")
             return None
 
-    def _get_selector(self, locator_type, locator_value):
-        selectors = {
-            'id': f'#{locator_value}',
-            'class': f'.{locator_value}',
-            'name': f'[name="{locator_value}"]',
-            'tag': locator_value,
-            'link': f'a:has-text("{locator_value}")',
-            'partial_link': f'a:has-text("{locator_value}")',
-            'xpath': locator_value,  # Playwright supports xpath directly
-            'css': locator_value,
-            'ariaLabel': f'[aria-label="{locator_value}"]',
-        }
-        
-        if locator_type.lower() not in selectors:
-            print("Selector is None")
-            raise ValueError(f"Unsupported locator type: {locator_type}. Available types are: {', '.join(selectors.keys())}")
-            
-        return selectors[locator_type.lower()]
-
-    def set_active_element(self, xpath_selector: str):
+    def get_locator(self, selector):
         error_msg = """Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."""
 
-        print(f"Getting element with xpath selector: {xpath_selector}")
+        count = self.page.locator(selector).count()
+
+        ret = None
+        if count == 0:
+            ret = error_msg
+        if count > 1:
+            ret = f"Multiple locators found. Pick one: {self.page.locator(selector)}"
+
+        locator = self.page.locator(selector)
+        # try:
+        #     handle = locator.elementHandle()
+        # except:
+        #     print("Invalid locator")
+
+        locator.scroll_into_view_if_needed(timeout=5000)
         try:
-            # self.active_element = self.page.query_selector(xpath_selector)
-            selector = f"xpath={xpath_selector}"
-            count = self.page.locator(selector).count()
+            if locator.is_visible(timeout=5000) == False:
+                ret = f"Element is not visible"
 
-            if count == 0:
-                return error_msg
+            if locator.is_enabled(timeout=5000) == False:
+                ret = f"Element is diabled."
+            
+            if ret is not None:
+                print(f"Error getting locator: {ret}")
+        except:
+            ret = "Invalid element. Recheck XPath Selector."
 
-            self.active_element = self.page.locator(selector)
-            print(f"Focused: {self.active_element}")
-            if self.active_element is None:
-                return error_msg
-            else:
-                try:
-                    self.active_element.scroll_into_view_if_needed()
-                except:
-                    pass
-                self.highlight_active_element('black', 5000)
-            # return f"Active element updated to element of class: {locator_value}"
-            return "Active element updated."
-        except Exception as e:
-            return f"Error setting active element: {str(e)}"
+        print(f"Locator: {locator}")
 
-    def send_keys_to_active_element(self, keys: str):
-        if self.active_element:
-            if self.active_element.is_visible() == False:
-                return "Active element is currently not visible."
+        return [locator, ret]
+
+    def send_keys_to_element(self, xpathSelector, keys: str):
+        selector = f"xpath={xpathSelector}"
+        locator = self.get_locator(selector)
+        active_element = locator[0]
+        error_msg = locator[1]
+
+        if error_msg is not None:
+            return error_msg
+        
+        if active_element:
+            if active_element.is_visible() == False:
+                return "Element is currently not visible."
 
             try:
-                self.active_element.focus()
-                self.active_element.type(keys, delay=50)
+                active_element.type(keys, delay=10)
                 time.sleep(2)  
-                return f"Keys sent to active element. Page Contents: {self.get_url_contents()}"
+                return f"Keys sent to element. Page Contents: {self.get_url_contents()}"
             except Exception as e:
                 return f"Error sending keys to element: {str(e)}"
-        return "Invalid active element. Set the active HTML element first."
+        return "Invalid element.."
 
-    def highlight_active_element(self, highlight_color='black', duration=3000):
+    def highlight_element(self, xpathSelector, highlight_color='black', duration=3000):
         """
         Creates a bounding box around the active element temporarily using Playwright's API.
 
@@ -239,8 +172,16 @@ Actions:
         :param duration: Duration in milliseconds for which the box should stay (default: 3000ms)
         """
         try:
+            selector = f"xpath={xpathSelector}"
+            locator = self.get_locator(selector)
+            active_element = locator[0]
+            error_msg = locator[1]
+
+            if error_msg is not None:
+                return error_msg
+            
             # Get the bounding box of the active element
-            bounding_box = self.active_element.bounding_box()
+            bounding_box = active_element.bounding_box()
             
             if bounding_box:
                 # Create an object with all necessary data for the JavaScript to use
@@ -269,36 +210,52 @@ Actions:
                     }
                 ''', box_data)
             else:
-                print("Could not get bounding box for the active element.")
+                print("Could not get bounding box for the element.")
         except Exception as e:
-            print(f"Error highlighting active element: {e}")
+            print(f"Error highlighting element: {e}")
 
-        return "Highlighted active element"
+        return "Highlighted element"
 
-    def call_submit(self):
+    def call_submit(self, xpathSelector):
         """ Calls submit on the active element. """
         try:
-            if self.active_element:
+            selector = f"xpath={xpathSelector}"
+            locator = self.get_locator(selector)
+            active_element = locator[0]
+            error_msg = locator[1]
+
+            if error_msg is not None:
+                return error_msg
+            
+            if active_element:
                 # In Playwright, we can either press Enter or submit the form
-                form = self.active_element.evaluate("el => el.closest('form')")
+                form = active_element.evaluate("el => el.closest('form')")
                 if form:
-                    self.active_element.evaluate("el => el.form.submit()")
+                    active_element.evaluate("el => el.form.submit()")
                 else:
-                    self.active_element.press('Enter')
+                    active_element.press('Enter')
                 return "Successfully called submit on active element"
-            return "No active element to submit"
+            return "No element to submit"
         except Exception as e:
             return f"Error submitting form: {str(e)}"
 
-    def click_active_element(self):
+    def click_element(self, xpathSelector):
         """ Clicks on the active element. """
         try:
-            if self.active_element:
+            selector = f"xpath={xpathSelector}"
+            locator = self.get_locator(selector)
+            active_element = locator[0]
+            error_msg = locator[1]
+
+            if error_msg is not None:
+                return error_msg
+            
+            if active_element:
                 try:
-                    self.active_element.scroll_into_view_if_needed(timeout=2000)
+                    active_element.scroll_into_view_if_needed(timeout=2000)
                 except:
                     pass
-                self.active_element.click(force=True)
+                active_element.click(force=True)
                 time.sleep(2)
                 return "Clicked element."
             return "Element is invalid. Ensure that a correct HTML element is selected."
@@ -312,23 +269,53 @@ Actions:
 
         """Summarize the given json (html). (Mostly to save tokens)"""
 
+        if len(json_str) > 20000:
+            assert(0) #!!!!
+
+        time_start = time.time()
         prompt = """You are a helpful assistant designed to extract relevant json data from a webpage HTML.
 1. Extract the relevant elements from the json as concisely as possible. Do not print any other text.
-2. Include all the attributes for the elements. This includes ids, classes, links and other tags.
+2. Include all the attributes for the elements. This includes ids, links and other tags.
 3. Extract important text.
-4. You will also be provided with the snapshot of the webpage. Use this information to summarize the data."""
+4. You will also be provided with the snapshot of the webpage.
+
+THe output should follow the given format as closely as possible:
+"inputs": [
+    {
+        ...all available attributes,
+    },
+    ..//inputs
+],
+"buttons": [
+    {
+        ...all available attributes,
+    },
+    .... //buttons
+],
+"links": [
+    {
+        ...all available attributes,
+    },
+    ..// links
+],
+//other types of elements"""
+        
         messages = MessageHistory(prompt)
         self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=50)
         if self.api != "ollama":
             messages.add_user_with_image(json_str, "browser.jpeg")
+            # messages.add_user_text(json_str)
         else:
             messages.add_user_text(json_str)
-        # messages.add_user_text(json_str)
+
         response = self.client.chat.completions.create(
             model=self.MODEL,
             messages=messages.get_messages_for_api(),
+            temperature=0.0
         )
-        print(f"Summary:{response.choices[0].message.content}")
+
+        # print(f"Summary:{response.choices[0].message.content}")
+        print(f"time (summarize): {time.time() - time_start}")
         return response.choices[0].message.content
 
     def run(self):
@@ -336,11 +323,10 @@ Actions:
         tool_dict = {
             "move_to_url": self.move_to_url,
             "get_url_contents": self.get_url_contents,
-            "set_active_element": self.set_active_element,
-            "send_keys_to_active_element": self.send_keys_to_active_element,
+            "send_keys_to_element": self.send_keys_to_element,
             "call_submit": self.call_submit,
-            "click_active_element": self.click_active_element,
-            "highlight_active_element": self.highlight_active_element,
+            "click_element": self.click_element,
+            "highlight_element": self.highlight_element,
         }
         
         api_key = os.environ.get('XAI_API_KEY')
@@ -421,7 +407,7 @@ Actions:
                 if user_input.lower() == 'quit':
                     break
             
-                # self.messages.trim_history(max_messages=self.MAX_MESSAGES)
+                self.messages.trim_history(max_messages=self.MAX_MESSAGES)
 
         finally:
             # Clean up Playwright resources
