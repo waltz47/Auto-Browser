@@ -64,6 +64,8 @@ def get_page_elements(page: Page) -> str:
     ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
     MAX_LINKS = 20 #max num of a tags
 
+    MAX_ELEMENTS = 200
+
     for element in elements:
         try:
             # Get element info using the JavaScript function
@@ -108,6 +110,9 @@ def get_page_elements(page: Page) -> str:
             element_info.pop("isVisible", None)
             
             structured_elements.append(element_info)
+
+            if len(structured_elements) > MAX_ELEMENTS:
+                break
             
         except Exception as e:
             print(f"Error processing element: {e}")

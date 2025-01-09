@@ -15,14 +15,19 @@ from messages import *
 class Worker:
     def __init__(self):
         self.playwright = sync_playwright().start()
-        self.browser = self.playwright.firefox.launch(headless=False)  # Set headless=True for production
-        self.context = self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            locale="en-US",
-            viewport={"width": 1280, "height": 768},
-            permissions=["geolocation"]
-        )
-        self.page = self.context.new_page()
+        self.browser = self.playwright.firefox.launch_persistent_context(user_data_dir=os.environ.get("USER_DATA_DIR"), headless=False,
+        viewport={"width":1280, "height": 768})  # Set headless=True for production
+        # self.context = self.browser.new_context(
+        #     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        #     locale="en-US",
+        #     viewport={"width": 1280, "height": 768},
+        #     permissions=["geolocation"]
+        # )
+        try:
+            self.page = self.browser.pages[0]
+        except:
+            self.page = self.browser.new_page()
+
         self.active_element = None
         self.done = True
         WORKER_SYSTEM_PROMPT = '''You are a helpful assistant designed to perform web actions via tools.
@@ -35,7 +40,7 @@ Here are the tools provided to you:
 - click_element: Click HTML element. Requires the xpath selector.
 - highlight_element: Highlight HTML element. Requires the xpath selector.
 
-When passing the xpathSelector argument, pass the xpath selector via tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. When using `contains`, ensure that the heirarchy for the element may be missing and text may be in a child element.
+When passing the xpathSelector argument, pass the xpath selector via tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. Prefer using `contains`, because the heirarchy for the element may be missing and text may be in a child element.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
@@ -56,7 +61,7 @@ Actions:
         try:
             self.page.goto(url, wait_until="domcontentloaded")
             time.sleep(3)
-            return f"Current page set to {url}. Use `get_url_contents` to get the contents of the page."
+            return f"Current page set to {url}. Page contents: {self.get_url_contents()}."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
 
@@ -115,31 +120,23 @@ Actions:
         count = self.page.locator(selector).count()
 
         ret = None
+
         if count == 0:
             ret = error_msg
-        if count > 1:
-            ret = f"Multiple locators found. Pick one: {self.page.locator(selector)}"
+        # elif count > 1:
+        #     ret = f"Multiple locators found. Pick one: {self.page.locator(selector).all()}"
 
         locator = self.page.locator(selector)
-        # try:
-        #     handle = locator.elementHandle()
-        # except:
-        #     print("Invalid locator")
+        if count > 1:
+            locator = locator.all()[0]
 
-        locator.scroll_into_view_if_needed(timeout=5000)
         try:
-            if locator.is_visible(timeout=5000) == False:
-                ret = f"Element is not visible"
+            locator.scroll_into_view_if_needed(timeout=5000)
+        except Exception as e:
+            pass
 
-            if locator.is_enabled(timeout=5000) == False:
-                ret = f"Element is diabled."
-            
-            if ret is not None:
-                print(f"Error getting locator: {ret}")
-        except:
-            ret = "Invalid element. Recheck XPath Selector."
-
-        print(f"Locator: {locator}")
+        if ret is not None:
+            print(f"Error getting locator: {ret}")
 
         return [locator, ret]
 
@@ -153,16 +150,20 @@ Actions:
             return error_msg
         
         if active_element:
-            if active_element.is_visible() == False:
-                return "Element is currently not visible."
+            try:
+                active_element.click(force=True)
+            except Exception as e:
+                return f"Error: {e}"
+                pass
 
             try:
+                self.highlight_element(xpathSelector)
                 active_element.type(keys, delay=10)
                 time.sleep(2)  
                 return f"Keys sent to element. Page Contents: {self.get_url_contents()}"
             except Exception as e:
                 return f"Error sending keys to element: {str(e)}"
-        return "Invalid element.."
+        return "Invalid element."
 
     def highlight_element(self, xpathSelector, highlight_color='black', duration=3000):
         """
@@ -255,6 +256,7 @@ Actions:
                     active_element.scroll_into_view_if_needed(timeout=2000)
                 except:
                     pass
+                self.highlight_element(xpathSelector)
                 active_element.click(force=True)
                 time.sleep(2)
                 return "Clicked element."
@@ -359,10 +361,9 @@ THe output should follow the given format as closely as possible:
                     # print(f"System: {user_input}")
 
                     self.messages.add_user_text(user_input)
-                # else:
-                #     # self.messages.add_user_text("Okay, keep going.")
-                #     self.page.screenshot(path='browser.jpeg',type="jpeg", full_page=False)
-                #     self.messages.add_user_with_image("Browser snapshot", "browser.jpeg")
+                else:
+                    self.page.screenshot(path='browser.jpeg',type="jpeg", full_page=False, quality=100)
+                    self.messages.add_user_with_image("Browser snapshot", "browser.jpeg")
                     # if get_page_elements(self.page) == self.prev_state:
                     #     pass
                     # else:
@@ -411,6 +412,6 @@ THe output should follow the given format as closely as possible:
 
         finally:
             # Clean up Playwright resources
-            self.context.close()
+            # self.context.close()
             self.browser.close()
             self.playwright.stop()
