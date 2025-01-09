@@ -11,6 +11,7 @@ from tools import *
 from metrics import *
 from web import *
 from messages import *
+from handler import *
 
 class Worker:
     def __init__(self):
@@ -40,7 +41,7 @@ Here are the tools provided to you:
 - click_element: Click HTML element. Requires the xpath selector.
 - highlight_element: Highlight HTML element. Requires the xpath selector.
 
-When passing the xpathSelector argument, pass the xpath selector via tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. Prefer using `contains`, because the heirarchy for the element may be missing and text may be in a child element.
+When passing the xpathSelector argument, pass the xpath selector via id, tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. Prefer using `contains`, because the heirarchy for the element may be missing and text may be in a child element.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
@@ -74,22 +75,26 @@ Actions:
             time.sleep(4)
             self.page.wait_for_load_state(state="domcontentloaded")
 
-            open("page.log", "w", encoding="utf-8").write(self.page.content())
+            open("log/page.log", "w", encoding="utf-8").write(self.page.content())
 
-            elements_info = get_page_elements(self.page)
+            elements = get_page_elements(self.page)
+            elements_info = process(self, elements)
             
-            # focused = get_focused_element_info(self.page)
             main_content = get_main_content(self.page)
             
             data = f"***PAGE JSON***\n\n{elements_info}\n\n{main_content}\n\n ***END OF PAGE JSON***"
 
+            open("log/last.log","w",encoding='utf-8').write(data)
             print(f"time (get page): {time.time() - time_start}")
 
             self.prev_state = elements_info
-            summarized = "Page Json Summary:\n" + self.summarize(data)
-
-            open("last.log","w",encoding='utf-8').write(data)
-            return summarized
+            # summarized = "Page Json Summary:\n" + self.summarize(data)
+            try:
+                self.page.wheel(0,1500)
+            except:
+                pass
+            return data
+            # return summarized
 
         except Exception as e:
             print("Error getting Page contents:", e)
@@ -117,6 +122,8 @@ Actions:
     def get_locator(self, selector):
         error_msg = """Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."""
 
+        time_start = time.time()
+
         count = self.page.locator(selector).count()
 
         ret = None
@@ -129,15 +136,14 @@ Actions:
         locator = self.page.locator(selector)
         if count > 1:
             locator = locator.all()[0]
-
         try:
-            locator.scroll_into_view_if_needed(timeout=5000)
+            locator.scroll_into_view_if_needed(timeout=200)
         except Exception as e:
             pass
 
         if ret is not None:
             print(f"Error getting locator: {ret}")
-
+        print(f"time (locator): {time.time() - time_start}")
         return [locator, ret]
 
     def send_keys_to_element(self, xpathSelector, keys: str):
@@ -280,6 +286,7 @@ Actions:
 2. Include all the attributes for the elements. This includes ids, links and other tags.
 3. Extract important text.
 4. You will also be provided with the snapshot of the webpage.
+5. Print the JSON directly (Do not print ```json). The json should be readable as-is.
 
 THe output should follow the given format as closely as possible:
 "inputs": [
@@ -303,7 +310,7 @@ THe output should follow the given format as closely as possible:
 //other types of elements"""
         
         messages = MessageHistory(prompt)
-        self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=50)
+        self.page.screenshot(path='browser.jpeg', type="jpeg", full_page=False, quality=80)
         if self.api != "ollama":
             messages.add_user_with_image(json_str, "browser.jpeg")
             # messages.add_user_text(json_str)
@@ -316,8 +323,17 @@ THe output should follow the given format as closely as possible:
             temperature=0.0
         )
 
+        json = response.choices[0].message.content
+        json = json.replace("```json","")
+        json = json.replace("```","")
+
+        print("JSON:\n", json)
+
+        print("Processed:\n", process(self, json_string=json))
+        # time.sleep(1000)
+
         # print(f"Summary:{response.choices[0].message.content}")
-        print(f"time (summarize): {time.time() - time_start}")
+        print(f"time (json summarize): {time.time() - time_start}")
         return response.choices[0].message.content
 
     def run(self):

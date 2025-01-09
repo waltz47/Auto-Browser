@@ -13,14 +13,14 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        # "h1", "h2", "h3", 
+        # "h1", "h2", "h3", "h4","h5"
         "form", 
-        # "label",
+        "label",
          "table", "ul", "ol", "nav",
         "[role='button']", "[role='link']", "[role='menuitem']", "[role='tab']",
         "[onclick]", "[class*='button']", "[class*='btn']",
         "[type='search']", "[aria-label*='search' i]",
-        "[class*='menu']", "[class*='nav']"
+        "[class*='menu']", "[class*='nav']", "iframe"
     ]
     
     # Combine all selectors
@@ -62,7 +62,7 @@ def get_page_elements(page: Page) -> str:
 
     ignored_tags = ["span"] #ignore all these tags
     ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
-    MAX_LINKS = 20 #max num of a tags
+    MAX_LINKS = 40 #max num of a tags
 
     MAX_ELEMENTS = 200
 
