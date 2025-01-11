@@ -4,3 +4,5 @@ scripts/__pycache__/*
 browser.png
 log/
 browser.jpeg
+web/__pycache__/
+web/__pycache__/*
