@@ -20,13 +20,14 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
             """
             Escapes a string for use in XPath by using concat() for single quotes.
             """
+            
             if "'" in value:
                 parts = value.split("'")
                 return "concat(" + ", ".join(f"'{part}'" for part in parts if part) + ", \"'\")"
             return f"'{value}'"
         
         # Process elements
-        for element_type in ['inputs', 'buttons', 'links']:
+        for element_type in ['inputs', 'buttons', 'links', "apps", "nav"]:
             for elem in data.get(element_type, []):
                 base_xpath = f"//{elem.get('tag', 'div')}"
 
@@ -36,6 +37,7 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
                 # Then check for href if it's a link
                 elif 'href' in elem and elem['href'] and elem.get('tag') == 'a':
                     base_xpath += f"[@href={escape_xpath_string(elem['href'])}]"
+                    # print(base_xpath)
                 # Check for aria-label
                 elif 'ariaLabel' in elem and elem['ariaLabel']:
                     base_xpath += f"[@aria-label={escape_xpath_string(elem['ariaLabel'])}]"
@@ -115,7 +117,7 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     for link in enhanced_json.get('links', []):
         try:
             element = page.wait_for_selector(f"xpath={link['xpath_selector']}", 
-                                           timeout=100, state="attached")
+                                           timeout=20, state="attached")
             link['test_result'] = {
                 'found': bool(element),
                 'visible': element.is_visible() if element else False,
@@ -133,29 +135,35 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
 
 def process(worker, json_string):
     time_start = time.time()
-    print(json_string)
+    # print(json_string)
     enhanced_json = enhance_json_with_selectors(worker.page, json_string)
     results = test_selectors_on_page(worker.page, enhanced_json)
 
     print(f"time (enhance): {time.time() - time_start}")
     time_start = time.time()
 
-    tags = ["inputs", "buttons", "links"]
+    tags = ["inputs", "buttons", "links", "apps", "nav"]
 
     for tag in tags:
         for input_elem in results.get(tag, []):
-            if input_elem['test_result']['status'] != 'success':
-                continue
             selector = f"{input_elem['xpath_selector']}"
-            worker.highlight_element(selector, "grey", 2000)
-            # time.sleep(0.0)
-
-    for tag in tags:
-        for input_elem in results.get(tag, []):
-            del input_elem['test_result']
+            try:
+                if input_elem['test_result']['status'] != 'success':
+                    continue
+            
+                worker.highlight_element(selector, "red", 2000)
+            except:
+                print(f"NA XPath: {selector}")
+    try:
+        for tag in tags:
+            for input_elem in results.get(tag, []):
+                del input_elem['test_result']
+    except:
+        pass
 
     print(f"time (summarize): {time.time() - time_start}")
 
+    results["elements_by_type"] = json.loads(json_string)['elements_by_type']
     open("log/cleaned.log", "w", encoding="utf-8").write(str(json.dumps(results,indent=2)))
     return str(json.dumps(results,indent=2))
 

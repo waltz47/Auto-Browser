@@ -16,15 +16,29 @@ def get_page_elements(page: Page) -> str:
         # "h1", "h2", "h3", "h4","h5"
         "form", 
         "label",
-         "table", "ul", "ol", "nav",
+        "table", "ul", "ol", "nav",
         "[role='button']", "[role='link']", "[role='menuitem']", "[role='tab']",
         "[onclick]", "[class*='button']", "[class*='btn']",
         "[type='search']", "[aria-label*='search' i]",
-        "[class*='menu']", "[class*='nav']", "iframe"
+        "[class*='menu']", "[class*='nav']", "iframe",
+    ]
+
+    react_selectors = [ "[data-reactroot]", 
+        "[data-reactid]",   
+        "[data-react-helmet]", 
+        "[class*='React']", 
+        "[class*='react-']", 
+        'react-app[app-name="react-code-view"]',]
+
+    vue_selectors = ["[data-v-]",  
+        "[v-if]",     
+        "[v-for]",    
+        "[v-bind]",   
+        "[v-on]",     
+        "[class*='vue']"
     ]
     
-    # Combine all selectors
-    combined_selector = ", ".join(important_selectors)
+    combined_selector = ", ".join(important_selectors + react_selectors + vue_selectors)
 
     # Get elements matching our selectors
     elements = page.query_selector_all(combined_selector)
@@ -36,35 +50,45 @@ def get_page_elements(page: Page) -> str:
     
     # JavaScript function as a single line with proper escaping
     js_element_info = """
-    (element) => {
-        const rect = element.getBoundingClientRect();
-        const computedStyle = window.getComputedStyle(element);
-        return {
-            tag: element.tagName.toLowerCase(),
-            type: element.type || undefined,
-            id: element.id || undefined,
-            name: element.name || undefined,
-            value: element.value || undefined,
-            href: element.href || undefined,
-            placeholder: element.placeholder || undefined,
-            ariaLabel: element.getAttribute('aria-label') || undefined,
-            role: element.getAttribute('role') || undefined,
-            text: (element.innerText || '').substring(0, 200),
-            isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
-            disabled: element.disabled || false
-        };
-    }
-    """.replace('\n', ' ').strip()
+        (element) => {
+            const rect = element.getBoundingClientRect();
+            const computedStyle = window.getComputedStyle(element);
+            return {
+                tag: element.tagName.toLowerCase(),
+                type: element.type || undefined,
+                id: element.id || undefined,
+                name: element.name || undefined,
+                value: element.value || undefined,
+                href: element.getAttribute('href') || undefined,
+                src: element.src || undefined,
+                placeholder: element.placeholder || undefined,
+                ariaLabel: element.getAttribute('aria-label') || undefined,
+                ariaDescribedby: element.getAttribute('aria-describedby') || undefined,
+                role: element.getAttribute('role') || undefined,
+                title: element.title || undefined,
+                text: (element.innerText || '').substring(0, 200),
+                isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
+                disabled: element.disabled || false,
+                checked: element.checked || undefined,
+                selected: element.selected || undefined,
+                multiple: element.multiple || undefined,
+                position: {
+                    x: rect.left,
+                    y: rect.top
+                }
+            };
+        }
+        """.replace('\n', ' ').strip()
 
     #add later if needed
     #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
     #classes: element.className || undefined,
 
-    ignored_tags = ["span"] #ignore all these tags
+    ignored_tags = ["span", "div"] #ignore all these tags
     ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
-    MAX_LINKS = 40 #max num of a tags
+    MAX_LINKS = 30 #max num of a tags
 
-    MAX_ELEMENTS = 200
+    MAX_ELEMENTS = 100
 
     for element in elements:
         try:
@@ -72,7 +96,7 @@ def get_page_elements(page: Page) -> str:
             element_info = element.evaluate(js_element_info)
             
             # Clean up the element info by removing undefined values
-            element_info = {k: v for k, v in element_info.items() if v is not None and v != "undefined"}
+            element_info = {k: v for k, v in element_info.items() if k is not None and v is not None and v != "undefined"}
             
             # Skip empty or uninformative elements
             if not any([
@@ -128,6 +152,7 @@ def get_page_elements(page: Page) -> str:
         "links": [],
         "headings": [],
         "navigation": [],
+        "apps": [],
         "other": []
     }
     
@@ -145,8 +170,11 @@ def get_page_elements(page: Page) -> str:
             grouped_elements["headings"].append(element)
         elif tag == 'nav' or (element.get('classes', '').find('nav') != -1):
             grouped_elements["navigation"].append(element)
+        elif "react" in tag:
+            grouped_elements["apps"].append(element)
         # else:
-        #     grouped_elements["other"].append(element)
+        #     if len(grouped_elements["other"]) < 20:
+        #         grouped_elements["other"].append(element)
     
     # Remove empty categories
     grouped_elements = {k: v for k, v in grouped_elements.items() if v}
@@ -164,7 +192,7 @@ def get_page_elements(page: Page) -> str:
     print(f"time (group iterator): {time.time() - time_start}")
     time_start = time.time()
     
-    return json.dumps(summary, indent=2, ensure_ascii=False)
+    return json.dumps(summary, indent=2)
 
 def get_focused_element_info(page: Page) -> Dict[str, Any]:
     """

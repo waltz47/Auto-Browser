@@ -16,8 +16,12 @@ from handler import *
 class Worker:
     def __init__(self):
         self.playwright = sync_playwright().start()
+        if os.environ.get("USER_DATA_DIR") is None:
+            print(f"Please set the USER_DATA_DIR env variable to allow persistent browser use.")
         self.browser = self.playwright.firefox.launch_persistent_context(user_data_dir=os.environ.get("USER_DATA_DIR"), headless=False,
-        viewport={"width":1280, "height": 768})  # Set headless=True for production
+        viewport={"width":1920, "height": 1080},
+        args = ["--start-maximized"],
+        no_viewport=True)
         # self.context = self.browser.new_context(
         #     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         #     locale="en-US",
@@ -31,6 +35,7 @@ class Worker:
 
         self.active_element = None
         self.done = True
+
         WORKER_SYSTEM_PROMPT = '''You are a helpful assistant designed to perform web actions via tools.
 
 Here are the tools provided to you:
@@ -40,8 +45,9 @@ Here are the tools provided to you:
 - submit: Submit the HTML element (for eg. to submit an input form). Requires the xpath selector.
 - click_element: Click HTML element. Requires the xpath selector.
 - highlight_element: Highlight HTML element. Requires the xpath selector.
+- move_and_click_at_page_position: Move to page location and click.
 
-When passing the xpathSelector argument, pass the xpath selector via id, tags, roles, text and other attributes. For eg: //input[@placeholder=\'Enter your location for delivery\']. Prefer using `contains`, because the heirarchy for the element may be missing and text may be in a child element.
+When passing the xpathSelector argument, always use thexpath selector provided in the JSON. If the selector is missing, use the element position in the page.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
@@ -52,7 +58,7 @@ Actions:
 - Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_element)
 - Call submit on the search bar (call_submit). This will take you to the search results page.
 - Get the HTML contents of the page (get_url_contents)
-- Open the page that is more likely to have the answer (move_to_url/ set_element/ click_element)
+- Open the page that is more likely to have the answer (move_to_url/ click_element)
 - Read the contents and output the answer to the question.'''
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
@@ -62,6 +68,7 @@ Actions:
         try:
             self.page.goto(url, wait_until="domcontentloaded")
             time.sleep(3)
+            print(f"Page: {url}")
             return f"Current page set to {url}. Page contents: {self.get_url_contents()}."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
@@ -86,15 +93,9 @@ Actions:
 
             open("log/last.log","w",encoding='utf-8').write(data)
             print(f"time (get page): {time.time() - time_start}")
-
-            self.prev_state = elements_info
-            # summarized = "Page Json Summary:\n" + self.summarize(data)
-            try:
-                self.page.wheel(0,1500)
-            except:
-                pass
+            if len(data) > 20000:
+                assert(0)
             return data
-            # return summarized
 
         except Exception as e:
             print("Error getting Page contents:", e)
@@ -123,11 +124,8 @@ Actions:
         error_msg = """Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."""
 
         time_start = time.time()
-
         count = self.page.locator(selector).count()
-
         ret = None
-
         if count == 0:
             ret = error_msg
         # elif count > 1:
@@ -137,7 +135,7 @@ Actions:
         if count > 1:
             locator = locator.all()[0]
         try:
-            locator.scroll_into_view_if_needed(timeout=200)
+            locator.scroll_into_view_if_needed(timeout=100)
         except Exception as e:
             pass
 
@@ -158,6 +156,7 @@ Actions:
         if active_element:
             try:
                 active_element.click(force=True)
+                active_element.fill("")
             except Exception as e:
                 return f"Error: {e}"
                 pass
@@ -171,7 +170,7 @@ Actions:
                 return f"Error sending keys to element: {str(e)}"
         return "Invalid element."
 
-    def highlight_element(self, xpathSelector, highlight_color='black', duration=3000):
+    def highlight_element(self, xpathSelector, highlight_color='red', duration=5000):
         """
         Creates a bounding box around the active element temporarily using Playwright's API.
 
@@ -245,6 +244,17 @@ Actions:
             return "No element to submit"
         except Exception as e:
             return f"Error submitting form: {str(e)}"
+    
+    def move_and_click_at_page_position(self, location_x, location_y):
+        try:
+            self.page.mouse.move(location_x, location_y)
+            self.page.mouse.click(location_x, location_y, force=True)
+
+            return f"Successfully moved to and clicked at coordinates: ({location_x}, {location_y})"
+        except Exception as e:
+            # Handle any exceptions that might occur during the operation
+            return f"An error occurred while moving and clicking at ({location_x}, {location_y}): {e}"
+
 
     def click_element(self, xpathSelector):
         """ Clicks on the active element. """
@@ -264,8 +274,8 @@ Actions:
                     pass
                 self.highlight_element(xpathSelector)
                 active_element.click(force=True)
-                time.sleep(2)
-                return "Clicked element."
+                time.sleep(3)
+                return f"Clicked element. Url Contents: {self.get_url_contents()}"
             return "Element is invalid. Ensure that a correct HTML element is selected."
         except Exception as e:
             error_message = f"Error clicking element: {str(e)}"
@@ -345,6 +355,7 @@ THe output should follow the given format as closely as possible:
             "call_submit": self.call_submit,
             "click_element": self.click_element,
             "highlight_element": self.highlight_element,
+            "move_and_click_at_page_position": self.move_and_click_at_page_position
         }
         
         api_key = os.environ.get('XAI_API_KEY')
@@ -373,6 +384,11 @@ THe output should follow the given format as closely as possible:
 
                 if self.done:
                     user_input = input("Enter:")
+
+                    # if "[" in user_input:
+                    #     # selector = user_input.replace("highlight","").strip()
+                    #     self.highlight_element(user_input)
+                    #     continue
                     self.done = False
                     # print(f"System: {user_input}")
 
@@ -404,11 +420,11 @@ THe output should follow the given format as closely as possible:
                 if response.choices[0].message.tool_calls:
                     for tool_call in response.choices[0].message.tool_calls:
                         function_name = tool_call.function.name
-                        print(f"Call: {function_name}")
+                        # print(f"Call: {function_name}")
                         function_args = json.loads(tool_call.function.arguments)
 
                         result = tool_dict[function_name](**function_args)
-                        print(f"Result: {result}")
+                        # print(f"Result: {result}")
 
                         self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
                         self.messages.add_tool_response(tool_call.id, result, function_name) 

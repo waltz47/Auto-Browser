@@ -131,6 +131,31 @@ functions = [
             },
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_and_click_at_page_position",
+            "description": "Moves cursor to a page element and clicks",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location_x": {
+                        "type": "number",
+                        "description": "The X coordinate of the element",
+                        "example_value": "56"
+                    },
+                    "location_y": {
+                        "type": "number",
+                        "description": "The y coordinate of the element",
+                        "example_value": "55"
+                    }
+                },
+                "required": ["location_x", "location_y"],
+                "optional": [],
+            },
+        }
+    },
+
 ]
 
 # elements_info = self.page.evaluate("""() => {
