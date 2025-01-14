@@ -66,7 +66,7 @@ def get_page_elements(page: Page) -> str:
                 ariaDescribedby: element.getAttribute('aria-describedby') || undefined,
                 role: element.getAttribute('role') || undefined,
                 title: element.title || undefined,
-                text: (element.innerText || '').substring(0, 200),
+                text: (element.innerText || '').substring(0, 100),
                 isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
                 disabled: element.disabled || false,
                 checked: element.checked || undefined,

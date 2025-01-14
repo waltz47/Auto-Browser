@@ -19,9 +19,11 @@ class Worker:
         if os.environ.get("USER_DATA_DIR") is None:
             print(f"Please set the USER_DATA_DIR env variable to allow persistent browser use.")
         self.browser = self.playwright.firefox.launch_persistent_context(user_data_dir=os.environ.get("USER_DATA_DIR"), headless=False,
-        viewport={"width":1920, "height": 1080},
         args = ["--start-maximized"],
-        no_viewport=True)
+        no_viewport="true",
+        record_video_dir = os.path.join(os.getcwd(), "videos"),
+        record_video_size={"width":1920, "height":1080})
+
         # self.context = self.browser.new_context(
         #     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
         #     locale="en-US",
@@ -384,6 +386,8 @@ THe output should follow the given format as closely as possible:
 
                 if self.done:
                     user_input = input("Enter:")
+                    if user_input.lower() == 'quit':
+                        break
 
                     # if "[" in user_input:
                     #     # selector = user_input.replace("highlight","").strip()
@@ -437,9 +441,6 @@ THe output should follow the given format as closely as possible:
                 elapsed_time = curr_time - last_time
                 print(f"Elapsed: {elapsed_time:.2f}s")
                 
-                if user_input.lower() == 'quit':
-                    break
-            
                 self.messages.trim_history(max_messages=self.MAX_MESSAGES)
 
         finally:

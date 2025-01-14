@@ -83,7 +83,7 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     for input_elem in enhanced_json.get('inputs', []):
         try:
             element = page.wait_for_selector(f"xpath={input_elem['xpath_selector']}", 
-                                           timeout=100, state="attached")
+                                           timeout=10, state="attached")
             input_elem['test_result'] = {
                 'found': bool(element),
                 'visible': element.is_visible() if element else False,
@@ -100,7 +100,7 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     for button in enhanced_json.get('buttons', []):
         try:
             element = page.wait_for_selector(f"xpath={button['xpath_selector']}", 
-                                           timeout=100, state="attached")
+                                           timeout=10, state="attached")
             button['test_result'] = {
                 'found': bool(element),
                 'visible': element.is_visible() if element else False,
@@ -117,7 +117,7 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     for link in enhanced_json.get('links', []):
         try:
             element = page.wait_for_selector(f"xpath={link['xpath_selector']}", 
-                                           timeout=20, state="attached")
+                                           timeout=10, state="attached")
             link['test_result'] = {
                 'found': bool(element),
                 'visible': element.is_visible() if element else False,
