@@ -184,12 +184,13 @@ class MessageHistory:
         # Find all messages containing JSON markers
         json_messages = []
         for i, msg in enumerate(self.messages):
-            if isinstance(msg.content, str) and "```json" in msg.content:
+            if isinstance(msg.content, str) and "PAGE JSON" in msg.content:
                 json_messages.append(i)
         
         # Replace content in all but the last 2 occurrences
-        if len(json_messages) > 2:
-            for i in json_messages[:-2]:
+        if len(json_messages) > 4:
+            for i in json_messages[:-4]:
+                print("Converting to Stale")
                 self.messages[i].content = "Stale page summary"
 
         # Truncate history if it exceeds max_messages

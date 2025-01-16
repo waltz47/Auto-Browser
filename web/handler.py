@@ -154,6 +154,12 @@ def process(worker, json_string):
                 worker.highlight_element(selector, "red", 2000)
             except:
                 print(f"NA XPath: {selector}")
+            
+            if tag == "links":
+                try:
+                    del input_elem['href']
+                except:
+                    pass
     try:
         for tag in tags:
             for input_elem in results.get(tag, []):

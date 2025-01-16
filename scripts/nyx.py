@@ -19,7 +19,7 @@ class Nyx:
         self.api = "openai"
         # self.MODEL="smallthinker"
         self.MODEL="gpt-4o"
-        self.MAX_MESSAGES = 50
+        self.MAX_MESSAGES = 100
 
     def start(self):
         worker = Worker()

@@ -13,7 +13,7 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        # "h1", "h2", "h3", "h4","h5"
+        "h1", "h2", "h3", "h4","h5"
         "form", 
         "label",
         "table", "ul", "ol", "nav",
@@ -71,11 +71,8 @@ def get_page_elements(page: Page) -> str:
                 disabled: element.disabled || false,
                 checked: element.checked || undefined,
                 selected: element.selected || undefined,
-                multiple: element.multiple || undefined,
-                position: {
-                    x: rect.left,
-                    y: rect.top
-                }
+                multiple: element.multiple || undefined
+                
             };
         }
         """.replace('\n', ' ').strip()
@@ -83,10 +80,14 @@ def get_page_elements(page: Page) -> str:
     #add later if needed
     #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
     #classes: element.className || undefined,
+    # position: {
+    #                 x: rect.left,
+    #                 y: rect.top
+    #             }
 
-    ignored_tags = ["span", "div"] #ignore all these tags
+    ignored_tags = [] #ignore all these tags
     ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
-    MAX_LINKS = 30 #max num of a tags
+    MAX_LINKS = 40 #max num of a tags
 
     MAX_ELEMENTS = 100
 

@@ -18,11 +18,18 @@ class Worker:
         self.playwright = sync_playwright().start()
         if os.environ.get("USER_DATA_DIR") is None:
             print(f"Please set the USER_DATA_DIR env variable to allow persistent browser use.")
-        self.browser = self.playwright.firefox.launch_persistent_context(user_data_dir=os.environ.get("USER_DATA_DIR"), headless=False,
-        args = ["--start-maximized"],
-        no_viewport="true",
-        record_video_dir = os.path.join(os.getcwd(), "videos"),
-        record_video_size={"width":1920, "height":1080})
+
+        self.browser = self.playwright.firefox.launch_persistent_context(
+            user_data_dir=os.environ.get("USER_DATA_DIR"), 
+            headless=False,
+            args=["--ignore-certificate-errors", "--disable-extensions"],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
+            no_viewport=False,
+            viewport={"width": 1920, "height": 1080},
+            record_video_dir=os.path.join(os.getcwd(), "videos"),
+            record_video_size={"width": 1920, "height": 1080},
+            permissions=["geolocation"]
+        ) 
 
         # self.context = self.browser.new_context(
         #     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -49,7 +56,8 @@ Here are the tools provided to you:
 - highlight_element: Highlight HTML element. Requires the xpath selector.
 - move_and_click_at_page_position: Move to page location and click.
 
-When passing the xpathSelector argument, always use thexpath selector provided in the JSON. If the selector is missing, use the element position in the page.
+When passing the xpathSelector argument, always use the selector provided in the JSON. 
+If there are multiple selectors available, pick selector required from the error message provided.
 
 An example query and actions:
 User: Can you check who won the world cup yesterday?
@@ -69,7 +77,7 @@ Actions:
     def move_to_url(self, url):
         try:
             self.page.goto(url, wait_until="domcontentloaded")
-            time.sleep(3)
+            time.sleep(2)
             print(f"Page: {url}")
             return f"Current page set to {url}. Page contents: {self.get_url_contents()}."
         except Exception as e:
@@ -96,7 +104,8 @@ Actions:
             open("log/last.log","w",encoding='utf-8').write(data)
             print(f"time (get page): {time.time() - time_start}")
             if len(data) > 20000:
-                assert(0)
+                print("JSON TOO BIG")
+                # assert(0)
             return data
 
         except Exception as e:
@@ -135,7 +144,8 @@ Actions:
 
         locator = self.page.locator(selector)
         if count > 1:
-            locator = locator.all()[0]
+            # locator = locator.all()[0]
+            ret = f"Multiple locators found. Call the tool with the appropriate selector from the list:\n{locator.all()}"
         try:
             locator.scroll_into_view_if_needed(timeout=100)
         except Exception as e:
@@ -166,7 +176,8 @@ Actions:
             try:
                 self.highlight_element(xpathSelector)
                 active_element.type(keys, delay=10)
-                time.sleep(2)  
+
+                time.sleep(2)
                 return f"Keys sent to element. Page Contents: {self.get_url_contents()}"
             except Exception as e:
                 return f"Error sending keys to element: {str(e)}"
@@ -250,7 +261,7 @@ Actions:
     def move_and_click_at_page_position(self, location_x, location_y):
         try:
             self.page.mouse.move(location_x, location_y)
-            self.page.mouse.click(location_x, location_y, force=True)
+            self.page.mouse.click(location_x, location_y)
 
             return f"Successfully moved to and clicked at coordinates: ({location_x}, {location_y})"
         except Exception as e:
@@ -412,6 +423,7 @@ THe output should follow the given format as closely as possible:
                     messages=self.messages.get_messages_for_api(),
                     tools=functions,
                     tool_choice="auto",
+                    temperature=0.0,
                     parallel_tool_calls=False
                 )
                 
@@ -424,11 +436,11 @@ THe output should follow the given format as closely as possible:
                 if response.choices[0].message.tool_calls:
                     for tool_call in response.choices[0].message.tool_calls:
                         function_name = tool_call.function.name
-                        # print(f"Call: {function_name}")
+                        print(f"Call: {function_name}")
                         function_args = json.loads(tool_call.function.arguments)
 
                         result = tool_dict[function_name](**function_args)
-                        # print(f"Result: {result}")
+                        print(f"Result: {result}")
 
                         self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
                         self.messages.add_tool_response(tool_call.id, result, function_name) 
