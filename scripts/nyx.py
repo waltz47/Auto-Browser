@@ -13,12 +13,21 @@ Class to handle workers via swarm
 """
 
 class Nyx:    
-    VISION=False #for grok-2-vision
 
     def __init__(self):
-        self.api = "openai"
-        # self.MODEL="smallthinker"
-        self.MODEL="gpt-4o"
+        if os.environ.get("OPENAI_API_KEY") is not None:
+            print("Using OpenAI API")
+            self.api = "openai"
+            self.MODEL = "gpt-4o"
+        elif os.environ.get("XAI_API_KEY") is not None:
+            print("Using XAI API")
+            self.api = "xai"
+            self.MODEL = "grok-2-beta"
+        else:
+            print("Using Ollama. ")
+            self.api = "ollama"
+            self.MODEL = "llama3.2:latest"
+
         self.MAX_MESSAGES = 100
 
     def start(self):
