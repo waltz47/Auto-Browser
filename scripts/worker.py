@@ -131,7 +131,7 @@ Actions:
             print(f"Error finding element: {e}")
             return None
 
-    def get_locator(self, selector):
+    def get_locator(self, selector, gfirst = False):
         error_msg = """Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."""
 
         time_start = time.time()
@@ -144,8 +144,10 @@ Actions:
 
         locator = self.page.locator(selector)
         if count > 1:
-            # locator = locator.all()[0]
-            ret = f"Multiple locators found. Call the tool with the appropriate selector from the list:\n{locator.all()}"
+            if gfirst:
+                locator = locator.all()[0]
+            else:
+                ret = f"Multiple locators found. Call the tool with the appropriate selector with >> n notation from the list:\n{locator.all()}"
         try:
             locator.scroll_into_view_if_needed(timeout=100)
         except Exception as e:
@@ -183,7 +185,7 @@ Actions:
                 return f"Error sending keys to element: {str(e)}"
         return "Invalid element."
 
-    def highlight_element(self, xpathSelector, highlight_color='red', duration=5000):
+    def highlight_element(self, xpathSelector, highlight_color='red', duration=5000, gfirst=False):
         """
         Creates a bounding box around the active element temporarily using Playwright's API.
 
@@ -192,7 +194,7 @@ Actions:
         """
         try:
             selector = f"xpath={xpathSelector}"
-            locator = self.get_locator(selector)
+            locator = self.get_locator(selector, gfirst)
             active_element = locator[0]
             error_msg = locator[1]
 
