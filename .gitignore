@@ -6,5 +6,4 @@ log/
 browser.jpeg
 web/__pycache__/
 web/__pycache__/*
-videos
-videos/*
+videos/
