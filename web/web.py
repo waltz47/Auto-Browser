@@ -21,6 +21,7 @@ def get_page_elements(page: Page) -> str:
         "[onclick]", "[class*='button']", "[class*='btn']",
         "[type='search']", "[aria-label*='search' i]",
         "[class*='menu']", "[class*='nav']", "iframe",
+        "span"
     ]
 
     react_selectors = [ "[data-reactroot]", 
