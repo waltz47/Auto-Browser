@@ -44,8 +44,12 @@ class Worker:
 
         self.active_element = None
         self.done = True
-
-        WORKER_SYSTEM_PROMPT = '''You are a helpful assistant designed to perform web actions via tools.
+        custom_instructions = ""
+        try:
+            custom_instructions = read("custom", "r").read()
+        except:
+            pass
+        WORKER_SYSTEM_PROMPT = f'''You are a helpful assistant designed to perform web actions via tools.
 
 Here are the tools provided to you:
 - move_to_url: Set a specific url as the active page.
@@ -69,7 +73,10 @@ Actions:
 - Call submit on the search bar (call_submit). This will take you to the search results page.
 - Get the HTML contents of the page (get_url_contents)
 - Open the page that is more likely to have the answer (move_to_url/ click_element)
-- Read the contents and output the answer to the question.'''
+- Read the contents and output the answer to the question.
+
+{custom_instructions}
+'''
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
         self.prev_state = ""
