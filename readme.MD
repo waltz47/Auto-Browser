@@ -3,14 +3,28 @@
 Auto Browser is a personal assistant designed to perform web actions via tools using Playwright. It includes functionalities to interact with web pages, extract elements, and enhance JSON data with robust XPath selectors.
 (Supported APIs: OpenAI, XAI, Local Ollama Model [WIP])
 
+What it's capable of - Some Examples:
+
+Searching the web for information:
+
 <div align="center">
     <img src="docs/clips/browse.gif" width="600" alt="Searching the web">
 </div>
 
+Creating a todo-list:
 
 <div align="center">
     <img src="docs/clips/todo.gif" width="600" alt="Creating To-do Lists">
 </div>
+
+Posting on linkedin:
+
+<div align="center">
+    <img src="docs/clips/lnkdin.gif" width="600" alt="Managing Linkedin">
+</div>
+
+
+
 
 ## Installation
 
