@@ -17,18 +17,31 @@ Class to handle workers via swarm
 class Nyx:    
 
     def __init__(self):
+
+        with open("api_config.cfg", 'r') as f:
+            cfg = f.read()
+
+        config = {}
+        for line in cfg.split('\n'):
+            if '=' in line:
+                key, value = line.split('=', 1)
+                config[key.strip()] = value.strip().strip('"')
+                print(f"{key.strip()}: {value.strip()}")
+
         if os.environ.get("OPENAI_API_KEY") is not None:
-            print("Using OpenAI API")
+            print(f"Using OpenAI API. Model: {config['openai_model']}")
             self.api = "openai"
-            self.MODEL = "gpt-4o"
+            self.MODEL = config["openai_model"]
+
         elif os.environ.get("XAI_API_KEY") is not None:
             print("Using XAI API")
             self.api = "xai"
-            self.MODEL = "grok-2-beta"
+            self.MODEL = config["xai_model"]
+
         else:
             print("Using Ollama. ")
             self.api = "ollama"
-            self.MODEL = "qwen2.5-coder:latest"
+            self.MODEL = config["ollama_local_model"]
 
         self.MAX_MESSAGES = 100
 
@@ -45,9 +58,9 @@ class Nyx:
             args=["--ignore-certificate-errors", "--disable-extensions"],
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
             no_viewport=False,
-            viewport={"width": 1920, "height": 1080},
+            # viewport={"width": 1920, "height": 1080},
             record_video_dir=os.path.join(os.getcwd(), "videos"),
-            record_video_size={"width": 1920, "height": 1080},
+            # record_video_size={"width": 1920, "height": 1080},
             permissions=["geolocation"]
         ) 
 
@@ -55,6 +68,9 @@ class Nyx:
             worker.page = self.browser.pages[0]
         except:
             worker.page = self.browser.new_page()
+
+        worker.browser = self.browser
+        worker.playwright = self.playwright
         
         worker.api = self.api
         worker.owner = self

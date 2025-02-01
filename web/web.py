@@ -29,7 +29,8 @@ def get_page_elements(page: Page) -> str:
         "[data-react-helmet]", 
         "[class*='React']", 
         "[class*='react-']", 
-        'react-app[app-name="react-code-view"]',]
+        'react-app[app-name="react-code-view"]',
+        "[data-target='react-partial.embeddedData']"]
 
     vue_selectors = ["[data-v-]",  
         "[v-if]",     
