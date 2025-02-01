@@ -46,8 +46,10 @@ class Worker:
         self.done = True
         custom_instructions = ""
         try:
-            custom_instructions = read("custom", "r").read()
+            custom_instructions = open("scripts/custom.log", "r").read()
+            print("Custom: ", custom_instructions)
         except:
+            print("No custom instructions")
             pass
         WORKER_SYSTEM_PROMPT = f'''You are a helpful assistant designed to perform web actions via tools.
 
@@ -77,6 +79,8 @@ Actions:
 
 {custom_instructions}
 '''
+
+        print(WORKER_SYSTEM_PROMPT)
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
         self.prev_state = ""
@@ -417,7 +421,7 @@ THe output should follow the given format as closely as possible:
                     # print(f"System: {user_input}")
 
                     self.messages.add_user_text(user_input)
-                else:
+                elif self.api != "ollama":
                     self.page.screenshot(path='browser.jpeg',type="jpeg", full_page=False, quality=100)
                     self.messages.add_user_with_image("Browser snapshot", "browser.jpeg")
                     # if get_page_elements(self.page) == self.prev_state:

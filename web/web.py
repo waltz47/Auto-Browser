@@ -13,7 +13,7 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        "h1", "h2", "h3", "h4","h5"
+        # "h1", "h2", "h3", "h4","h5"
         "form", 
         "label",
         "table", "ul", "ol", "nav",

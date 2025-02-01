@@ -7,4 +7,4 @@ browser.jpeg
 web/__pycache__/
 web/__pycache__/*
 videos/
-scripts/custom
+scripts/custom.log

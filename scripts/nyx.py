@@ -26,7 +26,7 @@ class Nyx:
         else:
             print("Using Ollama. ")
             self.api = "ollama"
-            self.MODEL = "llama3.2:latest"
+            self.MODEL = "qwen2.5-coder:latest"
 
         self.MAX_MESSAGES = 100
 
