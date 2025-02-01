@@ -15,32 +15,6 @@ from handler import *
 
 class Worker:
     def __init__(self):
-        self.playwright = sync_playwright().start()
-        if os.environ.get("USER_DATA_DIR") is None:
-            print(f"Please set the USER_DATA_DIR env variable to allow persistent browser use.")
-
-        self.browser = self.playwright.firefox.launch_persistent_context(
-            user_data_dir=os.environ.get("USER_DATA_DIR"), 
-            headless=False,
-            args=["--ignore-certificate-errors", "--disable-extensions"],
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
-            no_viewport=False,
-            viewport={"width": 1920, "height": 1080},
-            record_video_dir=os.path.join(os.getcwd(), "videos"),
-            record_video_size={"width": 1920, "height": 1080},
-            permissions=["geolocation"]
-        ) 
-
-        # self.context = self.browser.new_context(
-        #     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        #     locale="en-US",
-        #     viewport={"width": 1280, "height": 768},
-        #     permissions=["geolocation"]
-        # )
-        try:
-            self.page = self.browser.pages[0]
-        except:
-            self.page = self.browser.new_page()
 
         self.active_element = None
         self.done = True
