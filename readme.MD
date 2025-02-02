@@ -1,7 +1,7 @@
 # Auto Browser
 
 Auto Browser is a personal assistant designed to perform web actions via tools using Playwright. It includes functionalities to interact with web pages, extract elements, and enhance JSON data with robust XPath selectors.
-(Supported APIs: OpenAI, XAI, Local Ollama Model [WIP])
+(Supported APIs: OpenAI, XAI, Local Ollama Model)
 
 What it's capable of - Some Examples:
 
@@ -22,8 +22,6 @@ Posting on linkedin:
 <div align="center">
     <img src="docs/clips/lnkdin.gif" width="600" alt="Managing Linkedin">
 </div>
-
-
 
 
 ## Installation
@@ -57,8 +55,18 @@ Posting on linkedin:
 
 2. Enter the prompt in the browser.
 
-3. To change behavior you can add a custom prompt in `scripts/custom.log`
+3. To change the AI behavior or to add specific details, you can add a custom prompt in `scripts/custom.log`
 
+## How to Use Locally Installed Models via Ollama
+
+1. Ensure Ollama is installed.
+   
+2. Ensure the required ollama model in api_config.cfg is present.(`ollama pull <model>`)
+
+3. Run `ollama serve` in a terminal to start the ollama server.
+
+4. Finally, start auto-browser with `python run.py`.
+   
 ## Todo List
 
 - [X] Allow Local Models Via Ollama
