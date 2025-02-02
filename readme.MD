@@ -44,6 +44,8 @@ Posting on linkedin:
     ```
 
 4. Set the `OPENAI_API_KEY/XAI_API_KEY`.
+
+5. Set the model to use in `api_config.cfg` for the relevant API. Defaults to gpt-4o for OpenAI and grok-2-beta for XAI.
    
 
 ## Usage
@@ -53,7 +55,22 @@ Posting on linkedin:
     python run.py
     ```
 
-2. Enter the prompt in the terminal
+2. Enter the prompt in the browser.
+
+3. To change behavior you can add a custom prompt in `scripts/custom.log`
+
+## Todo List
+
+- [X] Allow Local Models Via Ollama
+- [X] Add Vision
+- [X] Make Logins Persistent
+- [X] Custom Prompting
+- [ ] Improve documentation
+- [ ] Add support for more APIs
+- [ ] Enhance error handling
+- [ ] Multiple tabs in parallel
+- [ ] Fix Playwright Recording Video Resolution
+- [ ] Allow Local File Access
 
 ## Contributing
 

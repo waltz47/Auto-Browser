@@ -151,7 +151,7 @@ def process(worker, json_string):
                 if input_elem['test_result']['status'] != 'success':
                     continue
             
-                worker.highlight_element(selector, "red", 2000, True)
+                # worker.highlight_element(selector, "red", 2000, True)
             except:
                 print(f"NA XPath: {selector}")
             

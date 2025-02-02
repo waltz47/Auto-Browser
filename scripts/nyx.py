@@ -44,6 +44,10 @@ class Nyx:
             self.MODEL = config["ollama_local_model"]
 
         self.MAX_MESSAGES = 100
+        
+    def on_browser_disconnected(self):
+        print("Browser disconnected. Exiting program.")
+        sys.exit(0)
 
     def start(self):
         worker = Worker()
@@ -57,12 +61,13 @@ class Nyx:
             headless=False,
             args=["--ignore-certificate-errors", "--disable-extensions"],
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
-            no_viewport=False,
-            # viewport={"width": 1920, "height": 1080},
+            no_viewport=True,
+            # viewport={"width": 1320, "height": 768},
             record_video_dir=os.path.join(os.getcwd(), "videos"),
-            # record_video_size={"width": 1920, "height": 1080},
+            # record_video_size={"width": 1320, "height": 768}, #fix this
             permissions=["geolocation"]
         ) 
+        self.browser.on('disconnected', self.on_browser_disconnected)
 
         try:
             worker.page = self.browser.pages[0]

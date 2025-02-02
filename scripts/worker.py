@@ -7,9 +7,14 @@ import traceback
 from playwright.sync_api import sync_playwright, Page, ElementHandle
 from playwright.sync_api import Page
 from openai import OpenAI
+
+# Add the project root to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from web.web import get_page_elements, get_focused_element_info, get_main_content
+from web.inject import inject_input_interface, get_command, mark_command_processed, check_and_reinject, highlight_elements_batch
 from tools import *
 from metrics import *
-from web import *
 from messages import *
 from handler import *
 
@@ -53,17 +58,27 @@ Actions:
 
 {custom_instructions}
 '''
-
         print(WORKER_SYSTEM_PROMPT)
 
         self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
         self.prev_state = ""
+        self.element_cache = {}  # Add cache for elements
 
     def move_to_url(self, url):
         try:
             self.page.goto(url, wait_until="domcontentloaded")
             time.sleep(2)
             print(f"Page: {url}")
+            
+            # Clear cache for new page
+            self.element_cache = {}
+            
+            # Get elements and highlight them efficiently
+            elements = get_page_elements(self.page)
+            elements_info = process(self, elements)
+            # print("Enabling highlights")
+            # highlight_elements_batch(self.page, elements_info)
+            
             return f"Current page set to {url}. Page contents: {self.get_url_contents()}."
         except Exception as e:
             return f"Error navigating to URL: {str(e)}"
@@ -71,6 +86,10 @@ Actions:
 
     def get_url_contents(self):
         """Get clean, structured representation of page contents."""
+
+        cache_key = self.page.url
+        if cache_key in self.element_cache:
+            return self.element_cache[cache_key]
 
         time_start = time.time()
         try:
@@ -91,6 +110,9 @@ Actions:
             if len(data) > 20000:
                 print("JSON TOO BIG")
                 # assert(0)
+            
+            # Cache the results
+            self.element_cache[cache_key] = data
             return data
 
         except Exception as e:
@@ -376,6 +398,9 @@ THe output should follow the given format as closely as possible:
                 base_url='http://localhost:11434/v1'
             )
             
+        # Inject our input interface
+        inject_input_interface(self.page)
+        
         last_time = time.time()
 
         try:
@@ -383,18 +408,21 @@ THe output should follow the given format as closely as possible:
                 curr_time = time.time()
 
                 if self.done:
-                    user_input = input("Enter:")
-                    if user_input.lower() == 'quit':
-                        break
-
-                    # if "[" in user_input:
-                    #     # selector = user_input.replace("highlight","").strip()
-                    #     self.highlight_element(user_input)
-                    #     continue
-                    self.done = False
-                    # print(f"System: {user_input}")
-
-                    self.messages.add_user_text(user_input)
+                    # Check for new command from interface
+                    user_input = get_command(self.page)
+                    if user_input:
+                        if user_input.lower() == 'quit':
+                            break
+                            
+                        self.done = False
+                        self.messages.add_user_text(user_input)
+                        mark_command_processed(self.page)
+                    else:
+                        time.sleep(0.3)  # Prevent busy waiting
+                        check_and_reinject(self.page)
+                        continue
+                        
+                # Rest of the code remains the same
                 elif self.api != "ollama":
                     self.page.screenshot(path='browser.jpeg',type="jpeg", full_page=False, quality=100)
                     self.messages.add_user_with_image("Browser snapshot", "browser.jpeg")
@@ -447,3 +475,5 @@ THe output should follow the given format as closely as possible:
             # self.context.close()
             self.browser.close()
             self.playwright.stop()
+            print("Playwright stopped.")
+            sys.exit(0)
