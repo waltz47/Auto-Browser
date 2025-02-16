@@ -73,10 +73,8 @@ Posting on linkedin:
 - [X] Add Vision
 - [X] Make Logins Persistent
 - [X] Custom Prompting
-- [ ] Improve documentation
-- [ ] Add support for more APIs
-- [ ] Enhance error handling
-- [ ] Multiple tabs in parallel
+- [X] Add support for more APIs
+- [X] Enhance error handling
 - [ ] Fix Playwright Recording Video Resolution
 - [ ] Allow Local File Access
 
