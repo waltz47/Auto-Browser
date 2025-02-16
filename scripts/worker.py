@@ -470,9 +470,9 @@ THe output should follow the given format as closely as possible:
                 
                 self.messages.trim_history(max_messages=self.MAX_MESSAGES)
 
+        except Exception as e:
+            print(f"Error in worker run loop: {e}")
         finally:
-            # Clean up Playwright resources
-            # self.context.close()
             self.browser.close()
             self.playwright.stop()
             print("Playwright stopped.")
