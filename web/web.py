@@ -1,9 +1,9 @@
 from typing import List, Dict, Any
-from playwright.sync_api import Page
+from playwright.async_api import Page  # Changed to async_api
 import time
 import json
 
-def get_page_elements(page: Page) -> str:
+async def get_page_elements(page: Page) -> str:
     """
     Get a clean, structured representation of important page elements.
     Returns elements in a format that's easy for LLMs to understand.
@@ -13,7 +13,6 @@ def get_page_elements(page: Page) -> str:
     # These elements are typically interactive or contain important content
     important_selectors = [
         "input", "button", "a[href]", "select", "textarea",
-        # "h1", "h2", "h3", "h4","h5"
         "form", 
         "label",
         "table", "ul", "ol", "nav",
@@ -30,7 +29,8 @@ def get_page_elements(page: Page) -> str:
         "[class*='React']", 
         "[class*='react-']", 
         'react-app[app-name="react-code-view"]',
-        "[data-target='react-partial.embeddedData']"]
+        "[data-target='react-partial.embeddedData']"
+    ]
 
     vue_selectors = ["[data-v-]",  
         "[v-if]",     
@@ -43,7 +43,7 @@ def get_page_elements(page: Page) -> str:
     combined_selector = ", ".join(important_selectors + react_selectors + vue_selectors)
 
     # Get elements matching our selectors
-    elements = page.query_selector_all(combined_selector)
+    elements = await page.query_selector_all(combined_selector)  # Now awaited
 
     print(f"time (query selector): {time.time() - time_start}")
     time_start = time.time()
@@ -74,29 +74,19 @@ def get_page_elements(page: Page) -> str:
                 checked: element.checked || undefined,
                 selected: element.selected || undefined,
                 multiple: element.multiple || undefined
-                
             };
         }
         """.replace('\n', ' ').strip()
 
-    #add later if needed
-    #isVisible: rect.width > 0 && rect.height > 0 && computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
-    #classes: element.className || undefined,
-    # position: {
-    #                 x: rect.left,
-    #                 y: rect.top
-    #             }
-
-    ignored_tags = [] #ignore all these tags
+    ignored_tags = []
     ignored_href_strings = ["policy", "policies", "facebook", "store", "googleadservices", "instagram"]
-    MAX_LINKS = 40 #max num of a tags
-
+    MAX_LINKS = 40
     MAX_ELEMENTS = 100
 
     for element in elements:
         try:
             # Get element info using the JavaScript function
-            element_info = element.evaluate(js_element_info)
+            element_info = await element.evaluate(js_element_info)  # Now awaited
             
             # Clean up the element info by removing undefined values
             element_info = {k: v for k, v in element_info.items() if k is not None and v is not None and v != "undefined"}
@@ -124,7 +114,6 @@ def get_page_elements(page: Page) -> str:
                     continue
                 
                 ignored = False
-                #ignored hrefs
                 for ignored_href in ignored_href_strings:
                     if ignored_href in element_info.get("href"):
                         ignored = True
@@ -175,9 +164,6 @@ def get_page_elements(page: Page) -> str:
             grouped_elements["navigation"].append(element)
         elif "react" in tag:
             grouped_elements["apps"].append(element)
-        # else:
-        #     if len(grouped_elements["other"]) < 20:
-        #         grouped_elements["other"].append(element)
     
     # Remove empty categories
     grouped_elements = {k: v for k, v in grouped_elements.items() if v}
@@ -193,15 +179,13 @@ def get_page_elements(page: Page) -> str:
         "elements": grouped_elements
     }
     print(f"time (group iterator): {time.time() - time_start}")
-    time_start = time.time()
     
     return json.dumps(summary, indent=2)
 
-def get_focused_element_info(page: Page) -> Dict[str, Any]:
+async def get_focused_element_info(page: Page) -> Dict[str, Any]:
     """
     Get information about the currently focused element.
     """
-
     time_start = time.time()
     js_focused = """
     () => {
@@ -219,15 +203,14 @@ def get_focused_element_info(page: Page) -> Dict[str, Any]:
     }
     """.replace('\n', ' ').strip()
     
-    focused = page.evaluate(js_focused)
+    focused = await page.evaluate(js_focused)  # Now awaited
     print(f"time (focused element): {time.time() - time_start}")
     return focused if focused else {"info": "No element currently focused"}
 
-def get_main_content(page: Page) -> str:
+async def get_main_content(page: Page) -> str:
     """
     Extract the main content of the page.
     """
-
     time_start = time.time()
 
     js_main_content = """
@@ -246,6 +229,6 @@ def get_main_content(page: Page) -> str:
     }
     """.replace('\n', ' ').strip()
     
-    main_content = page.evaluate(js_main_content)
+    main_content = await page.evaluate(js_main_content)  # Now awaited
     print(f"time (main page): {time.time() - time_start}")
     return main_content

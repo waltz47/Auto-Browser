@@ -1,9 +1,9 @@
 import json
-from playwright.sync_api import Page, Locator
+from playwright.async_api import Page, Locator  # Changed to async_api
 from typing import Dict, Any
 import time
 
-def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
+async def enhance_json_with_selectors(page: Page, json_string: str) -> Dict[str, Any]:
     """
     Parse JSON string and enhance it with robust XPath selectors.
     Priority is given to id, href, ariaLabel, and text. Falls back to combining all attributes if needed.
@@ -20,7 +20,6 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
             """
             Escapes a string for use in XPath by using concat() for single quotes.
             """
-            
             if "'" in value:
                 parts = value.split("'")
                 return "concat(" + ", ".join(f"'{part}'" for part in parts if part) + ", \"'\")"
@@ -37,7 +36,6 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
                 # Then check for href if it's a link
                 elif 'href' in elem and elem['href'] and elem.get('tag') == 'a':
                     base_xpath += f"[@href={escape_xpath_string(elem['href'])}]"
-                    # print(base_xpath)
                 # Check for aria-label
                 elif 'ariaLabel' in elem and elem['ariaLabel']:
                     base_xpath += f"[@aria-label={escape_xpath_string(elem['ariaLabel'])}]"
@@ -64,7 +62,7 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
 
                 # Add count logic to handle multiple elements
                 try:
-                    elements = page.query_selector_all(f"xpath={base_xpath}")
+                    elements = await page.query_selector_all(f"xpath={base_xpath}")  # Now awaited
                     # elem['element_count'] = len(elements)
                 except Exception as e:
                     # elem['element_count'] = 0
@@ -75,18 +73,18 @@ def enhance_json_with_selectors(page, json_string: str) -> Dict[str, Any]:
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON string: {str(e)}")
 
-def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[str, Any]:
+async def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     Test the XPath selectors on the given page and add results to the JSON.
     """
     # Process inputs
     for input_elem in enhanced_json.get('inputs', []):
         try:
-            element = page.wait_for_selector(f"xpath={input_elem['xpath_selector']}", 
-                                           timeout=10, state="attached")
+            element = await page.wait_for_selector(f"xpath={input_elem['xpath_selector']}", 
+                                                  timeout=10, state="attached")  # Now awaited
             input_elem['test_result'] = {
                 'found': bool(element),
-                'visible': element.is_visible() if element else False,
+                'visible': await element.is_visible() if element else False,  # Now awaited
                 'status': 'success'
             }
         except Exception as e:
@@ -99,11 +97,11 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     # Process buttons
     for button in enhanced_json.get('buttons', []):
         try:
-            element = page.wait_for_selector(f"xpath={button['xpath_selector']}", 
-                                           timeout=10, state="attached")
+            element = await page.wait_for_selector(f"xpath={button['xpath_selector']}", 
+                                                  timeout=10, state="attached")  # Now awaited
             button['test_result'] = {
                 'found': bool(element),
-                'visible': element.is_visible() if element else False,
+                'visible': await element.is_visible() if element else False,  # Now awaited
                 'status': 'success'
             }
         except Exception as e:
@@ -116,11 +114,11 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     # Process links
     for link in enhanced_json.get('links', []):
         try:
-            element = page.wait_for_selector(f"xpath={link['xpath_selector']}", 
-                                           timeout=10, state="attached")
+            element = await page.wait_for_selector(f"xpath={link['xpath_selector']}", 
+                                                  timeout=10, state="attached")  # Now awaited
             link['test_result'] = {
                 'found': bool(element),
-                'visible': element.is_visible() if element else False,
+                'visible': await element.is_visible() if element else False,  # Now awaited
                 'status': 'success'
             }
         except Exception as e:
@@ -132,12 +130,10 @@ def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> Dict[st
     
     return enhanced_json
 
-
-def process(worker, json_string):
+async def process(worker, json_string):
     time_start = time.time()
-    # print(json_string)
-    enhanced_json = enhance_json_with_selectors(worker.page, json_string)
-    results = test_selectors_on_page(worker.page, enhanced_json)
+    enhanced_json = await enhance_json_with_selectors(worker.page, json_string)  # Now awaited
+    results = await test_selectors_on_page(worker.page, enhanced_json)  # Now awaited
 
     print(f"time (enhance): {time.time() - time_start}")
     time_start = time.time()
@@ -151,7 +147,7 @@ def process(worker, json_string):
                 if input_elem['test_result']['status'] != 'success':
                     continue
             
-                # worker.highlight_element(selector, "red", 2000, True)
+                # await worker.highlight_element(selector, "red", 2000, True)  # Uncomment and await if needed
             except:
                 print(f"NA XPath: {selector}")
             
@@ -170,8 +166,8 @@ def process(worker, json_string):
     print(f"time (summarize): {time.time() - time_start}")
 
     results["elements_by_type"] = json.loads(json_string)['elements_by_type']
-    open("log/cleaned.log", "w", encoding="utf-8").write(str(json.dumps(results,indent=2)))
-    return str(json.dumps(results,indent=2))
+    open(f"log/cleaned_{worker.worker_id}.log", "w", encoding="utf-8").write(str(json.dumps(results, indent=2)))
+    return str(json.dumps(results, indent=2))
 
 # Example usage:
 """
@@ -184,17 +180,20 @@ json_string = '''
 }
 '''
 
-enhanced_json = enhance_json_with_selectors(json_string)
+import asyncio
+from playwright.async_api import async_playwright
 
-# Then test the selectors on an already open page
-from playwright.sync_api import sync_playwright
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        # Assuming page is already navigated to the target URL
+        enhanced_json = await enhance_json_with_selectors(page, json_string)
+        results = await test_selectors_on_page(page, enhanced_json)
+        
+        # Print or process results
+        print(json.dumps(results, indent=2))
+        await browser.close()
 
-with sync_playwright() as p:
-    browser = p.chromium.launch()
-    page = browser.new_page()
-    # Assuming page is already navigated to the target URL
-    results = test_selectors_on_page(page, enhanced_json)
-    
-    # Print or process results
-    print(json.dumps(results, indent=2))
+asyncio.run(main())
 """
