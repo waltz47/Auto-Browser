@@ -1,82 +1,77 @@
 import os
 import time
 import json
-import base64
-import sys
-import traceback
 import asyncio
-import queue  # Added this import
-from queue import Queue
-from playwright.async_api import async_playwright, Page, ElementHandle
+from playwright.async_api import Page
 from openai import AsyncOpenAI
-# Add the project root to Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from typing import Dict, Any
 
-from web.web import get_page_elements, get_focused_element_info, get_main_content
+# Assuming these imports remain necessary from your project structure
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from web import *
 from tools import *
 from metrics import *
 from messages import *
 from handler import *
 
 class Worker:
-    def __init__(self, page: Page, worker_id: int, request_queue: Queue, api: str, model: str, max_messages: int):
+    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int):
+        """Initialize a worker with a browser page and configuration."""
         self.page = page
         self.worker_id = worker_id
-        self.request_queue = request_queue
-        self.input_queue = Queue()  # Worker-specific input queue
+        self.request_queue = request_queue  # Sync queue for signaling input need
+        self.input_queue = None  # Will be set to asyncio.Queue by Nyx
         self.api = api
-        self.MODEL = model
-        self.MAX_MESSAGES = max_messages
-        self.active_element = None
-        self.done = True
-        self.waiting_for_input = False
-        self.element_cache = {}
+        self.model = model
+        self.max_messages = max_messages
+        self.element_cache: Dict[str, str] = {}
         self.client = None
-        self.last_time = time.time()
+        self.messages = self._init_message_history()
+        self.is_running = True
+        self.waiting_for_input = False
 
-        custom_instructions = ""
+    def _init_message_history(self) -> MessageHistory:
+        """Initialize the message history with system prompt."""
         try:
             with open("scripts/custom.log", "r") as f:
                 custom_instructions = f.read()
-            print(f"Worker {self.worker_id} Custom: {custom_instructions}")
-        except:
+        except FileNotFoundError:
+            custom_instructions = ""
             print(f"Worker {self.worker_id}: No custom instructions")
 
-        WORKER_SYSTEM_PROMPT = f'''You are a helpful assistant designed to perform web actions via tools.
+        system_prompt = f'''You are a helpful assistant designed to perform web actions via tools.
 
-Here are the tools provided to you:
-- move_to_url: Set a specific url as the active page.
-- get_url_contents: Get the contents from the active page. Required when a new url is opened or changes are made to the page.
-- send_keys_to_element: Send keys to page HTML element (for eg. to input text). Requires the xpath selector.
-- submit: Submit the HTML element (for eg. to submit an input form). Requires the xpath selector.
-- click_element: Click HTML element. Requires the xpath selector.
-- highlight_element: Highlight HTML element. Requires the xpath selector.
-- move_and_click_at_page_position: Move to page location and click.
+Available tools:
+- move_to_url: Navigate to a specific URL.
+- get_url_contents: Retrieve current page contents.
+- send_keys_to_element: Input text into an element (requires xpath).
+- call_submit: Submit a form (requires xpath).
+- click_element: Click an element (requires xpath).
+- highlight_element: Highlight an element (requires xpath).
+- move_and_click_at_page_position: Click at specific coordinates.
 
-When passing the xpathSelector argument, always use the selector provided in the JSON. 
-If there are multiple selectors available, pick selector required from the error message provided.
+Use provided xpath selectors from JSON data. For multiple matches, select based on context or error hints.
 
-An example query and actions:
-User: Can you check who won the world cup yesterday?
-Actions:    
-- Open the Google homepage (move_to_url)
-- Get the HTML contents of the page (get_url_contents)
-- Set the search bar as the active element (set_element)
-- Send Keys "Who won the world cup yesterday?" to the search bar (send_keys_to_element)
-- Call submit on the search bar (call_submit). This will take you to the search results page.
-- Get the HTML contents of the page (get_url_contents)
-- Open the page that is more likely to have the answer (move_to_url/ click_element)
-- Read the contents and output the answer to the question.
+Example:
+Query: "Check yesterday's World Cup winner"
+Steps:
+1. move_to_url("https://google.com")
+2. get_url_contents()
+3. send_keys_to_element(search bar xpath, "Who won the World Cup yesterday?")
+4. call_submit(search bar xpath)
+5. get_url_contents()
+6. click_element(result link xpath)
+7. get_url_contents() and extract answer
 
-{custom_instructions}
-'''
-        print(f"Worker {self.worker_id} System Prompt:\n{WORKER_SYSTEM_PROMPT}")
-        self.messages = MessageHistory(WORKER_SYSTEM_PROMPT)
+{custom_instructions}'''
+        print(f"Worker {self.worker_id} System Prompt:\n{system_prompt}")
+        return MessageHistory(system_prompt)
 
     async def setup_client(self):
+        """Set up the OpenAI client based on API configuration."""
         api_key = os.environ.get('XAI_API_KEY')
-        if api_key is None and self.api == "xai":
-            print(f"Worker {self.worker_id}: XAI_API_KEY environment variable not set.")
+        if self.api == "xai" and not api_key:
+            print(f"Worker {self.worker_id}: XAI_API_KEY not set.")
             sys.exit(1)
         if self.api == "openai":
             self.client = AsyncOpenAI()
@@ -85,82 +80,100 @@ Actions:
         elif self.api == "ollama":
             self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
 
-    async def move_to_url(self, url):
+    async def move_to_url(self, url: str) -> str:
+        """Navigate to a URL and return page contents."""
         try:
             await self.page.goto(url, wait_until="domcontentloaded")
             await asyncio.sleep(2)
-            print(f"Worker {self.worker_id} Page: {url}")
-            self.element_cache = {}
-            elements = await get_page_elements(self.page)
-            elements_info = await process(self, elements)  # Changed to await process
-            contents = await self.get_url_contents()
-            return f"Current page set to {url}. Page contents: {contents}"
+            print(f"Worker {self.worker_id} Navigated to: {url}")
+            self.element_cache.clear()
+            return f"Navigated to {url}. Contents: {await self.get_url_contents()}"
         except Exception as e:
-            error_msg = str(e)
-            return f"Worker {self.worker_id} Error navigating to URL: {error_msg}"
+            return f"Worker {self.worker_id} Error navigating to URL: {str(e)}"
 
-    async def get_url_contents(self):
+    async def get_url_contents(self) -> str:
+        """Retrieve and cache the current page's contents."""
         cache_key = self.page.url
         if cache_key in self.element_cache:
             return self.element_cache[cache_key]
-        time_start = time.time()
+        
         try:
             await asyncio.sleep(4)
             await self.page.wait_for_load_state(state="domcontentloaded")
             content = await self.page.content()
             with open(f"log/page_{self.worker_id}.log", "w", encoding="utf-8") as f:
                 f.write(content)
+            
             elements = await get_page_elements(self.page)
-            elements_info = await process(self, elements)  # Changed to await process
+            elements_info = await process(self, elements)
             main_content = await get_main_content(self.page)
             data = f"***PAGE JSON***\n\n{elements_info}\n\n{main_content}\n\n ***END OF PAGE JSON***"
-            with open(f"log/last_{self.worker_id}.log", "w", encoding='utf-8') as f:
+            
+            with open(f"log/last_{self.worker_id}.log", "w", encoding="utf-8") as f:
                 f.write(data)
-            print(f"Worker {self.worker_id} time (get page): {time.time() - time_start}")
             if len(data) > 20000:
                 print(f"Worker {self.worker_id}: JSON TOO BIG")
             self.element_cache[cache_key] = data
             return data
         except Exception as e:
-            print(f"Worker {self.worker_id} Error getting Page contents: {e}")
+            print(f"Worker {self.worker_id} Error getting page contents: {e}")
             return "Error retrieving page contents"
 
-    async def send_keys_to_element(self, xpathSelector, keys: str):
-        selector = f"xpath={xpathSelector}"
-        locator = await self.get_locator(selector)
-        active_element = locator[0]
-        error_msg = locator[1]
-        if error_msg is not None:
-            return error_msg
-        if active_element:
-            try:
-                await active_element.click(force=True)
-                await active_element.fill("")
-            except Exception as e:
-                return f"Worker {self.worker_id} Error: {e}"
-            try:
-                await self.highlight_element(xpathSelector)
-                await active_element.type(keys, delay=10)
-                await asyncio.sleep(2)
-                contents = await self.get_url_contents()
-                return f"Worker {self.worker_id}: Keys sent to element. Page Contents: {contents}"
-            except Exception as e:
-                return f"Worker {self.worker_id} Error sending keys to element: {str(e)}"
-        return "Invalid element."
-
-    async def highlight_element(self, xpathSelector, highlight_color='red', duration=5000, gfirst=False):
+    async def send_keys_to_element(self, xpathSelector: str, keys: str) -> str:
+        """Send keys to an element identified by xpath."""
+        locator, error = await self._get_locator(xpathSelector)
+        if error:
+            return error
         try:
-            selector = f"xpath={xpathSelector}"
-            locator = await self.get_locator(selector, gfirst)
-            active_element = locator[0]
-            error_msg = locator[1]
-            if error_msg is not None:
-                return error_msg
-            bounding_box = await active_element.bounding_box()
+            await locator.click(force=True)
+            await locator.fill("")
+            await self.highlight_element(xpathSelector)
+            await locator.type(keys, delay=10)
+            await asyncio.sleep(2)
+            return f"Worker {self.worker_id}: Keys sent. Contents: {await self.get_url_contents()}"
+        except Exception as e:
+            return f"Worker {self.worker_id} Error sending keys: {str(e)}"
+
+    async def call_submit(self, xpathSelector: str) -> str:
+        """Submit a form using the element at xpath."""
+        locator, error = await self._get_locator(xpathSelector)
+        if error:
+            return error
+        try:
+            form = await locator.evaluate("el => el.closest('form')")
+            if form:
+                await locator.evaluate("el => el.form.submit()")
+            else:
+                await locator.press('Enter')
+            return f"Worker {self.worker_id}: Form submitted"
+        except Exception as e:
+            return f"Worker {self.worker_id} Error submitting form: {str(e)}"
+
+    async def click_element(self, xpathSelector: str) -> str:
+        """Click an element identified by xpath."""
+        locator, error = await self._get_locator(xpathSelector)
+        if error:
+            return error
+        try:
+            await locator.scroll_into_view_if_needed(timeout=2000)
+            await self.highlight_element(xpathSelector)
+            await locator.click(force=True)
+            await asyncio.sleep(3)
+            return f"Worker {self.worker_id}: Element clicked. Contents: {await self.get_url_contents()}"
+        except Exception as e:
+            return f"Worker {self.worker_id} Error clicking element: {str(e)}"
+
+    async def highlight_element(self, xpathSelector: str, color='red', duration=5000) -> str:
+        """Highlight an element for visual debugging."""
+        locator, error = await self._get_locator(xpathSelector)
+        if error:
+            return error
+        try:
+            bounding_box = await locator.bounding_box()
             if bounding_box:
-                box_data = {'box': bounding_box, 'color': highlight_color, 'duration': duration}
-                await self.page.evaluate('''
-                    (data) => {
+                box_data = {'box': bounding_box, 'color': color, 'duration': duration}
+                await self.page.evaluate(
+                    '''(data) => {
                         const div = document.createElement('div');
                         div.style.cssText = `position:absolute;z-index:9999;border:4px solid ${data.color};pointer-events:none;`;
                         div.style.left = `${data.box.x + window.scrollX}px`;
@@ -168,105 +181,44 @@ Actions:
                         div.style.width = `${data.box.width}px`;
                         div.style.height = `${data.box.height}px`;
                         document.body.appendChild(div);
-                        setTimeout(() => {
-                            if (div && div.parentNode) {
-                                div.parentNode.removeChild(div);
-                            }
-                        }, data.duration);
-                    }
-                ''', box_data)
-            else:
-                print(f"Worker {self.worker_id}: Could not get bounding box for the element.")
-            return "Highlighted element"
+                        setTimeout(() => div.parentNode?.removeChild(div), data.duration);
+                    }''', box_data)
+            return "Element highlighted"
         except Exception as e:
-            print(f"Worker {self.worker_id} Error highlighting element: {e}")
-            return f"Error highlighting element: {str(e)}"
+            print(f"Worker {self.worker_id} Error highlighting: {e}")
+            return "Error highlighting element"
 
-    async def call_submit(self, xpathSelector):
+    async def move_and_click_at_page_position(self, x: float, y: float) -> str:
+        """Move to and click at specific page coordinates."""
         try:
-            selector = f"xpath={xpathSelector}"
-            locator = await self.get_locator(selector)
-            active_element = locator[0]
-            error_msg = locator[1]
-            if error_msg is not None:
-                return error_msg
-            if active_element:
-                form = await active_element.evaluate("el => el.closest('form')")
-                if form:
-                    await active_element.evaluate("el => el.form.submit()")
-                else:
-                    await active_element.press('Enter')
-                return f"Worker {self.worker_id}: Successfully called submit on active element"
-            return "No element to submit"
+            await self.page.mouse.move(x, y)
+            await self.page.mouse.click(x, y)
+            return f"Worker {self.worker_id}: Clicked at ({x}, {y})"
         except Exception as e:
-            return f"Worker {self.worker_id} Error submitting form: {str(e)}"
+            return f"Worker {self.worker_id} Error clicking at ({x}, {y}): {str(e)}"
 
-    async def move_and_click_at_page_position(self, location_x, location_y):
+    async def _get_locator(self, xpathSelector: str, first_only=False) -> tuple[Any, str]:
+        """Retrieve a locator for an xpath, handling multiple matches."""
+        selector = f"xpath={xpathSelector}"
         try:
-            await self.page.mouse.move(location_x, location_y)
-            await self.page.mouse.click(location_x, location_y)
-            return f"Worker {self.worker_id}: Successfully moved to and clicked at coordinates: ({location_x}, {location_y})"
-        except Exception as e:
-            return f"Worker {self.worker_id}: An error occurred while moving and clicking at ({location_x}, {location_y}): {e}"
-
-    async def click_element(self, xpathSelector):
-        try:
-            selector = f"xpath={xpathSelector}"
-            locator = await self.get_locator(selector)
-            active_element = locator[0]
-            error_msg = locator[1]
-            if error_msg is not None:
-                return error_msg
-            if active_element:
-                try:
-                    await active_element.scroll_into_view_if_needed(timeout=2000)
-                except:
-                    pass
-                await self.highlight_element(xpathSelector)
-                await active_element.click(force=True)
-                await asyncio.sleep(3)
-                contents = await self.get_url_contents()
-                return f"Worker {self.worker_id}: Clicked element. Url Contents: {contents}"
-            return "Element is invalid. Ensure that a correct HTML element is selected."
-        except Exception as e:
-            error_message = f"Worker {self.worker_id} Error clicking element: {str(e)}"
-            print(error_message)
-            print(f"Worker {self.worker_id} Stack trace:", traceback.format_exc())
-            return error_message
-
-    async def get_locator(self, selector, gfirst=False):
-        error_msg = "Invalid XPath Selector. Recheck the selector arguments, text content and case sensitivity."
-        time_start = time.time()
-        try:
-            count = await self.page.locator(selector).count()
-            ret = None
-            if count == 0:
-                ret = error_msg
             locator = self.page.locator(selector)
-            if count > 1:
-                if gfirst:
-                    locator = (await locator.all())[0]
-                else:
-                    all_locators = await locator.all()
-                    ret = f"Multiple locators found. Call the tool with the appropriate selector with >> n notation from the list:\n{all_locators}"
-            try:
-                await locator.scroll_into_view_if_needed(timeout=100)
-            except Exception:
-                pass
-            if ret is not None:
-                print(f"Worker {self.worker_id} Error getting locator: {ret}")
-            print(f"Worker {self.worker_id} time (locator): {time.time() - time_start}")
-            return [locator, ret]
+            count = await locator.count()
+            if count == 0:
+                return None, "Invalid XPath: No elements found"
+            if count > 1 and not first_only:
+                return None, f"Multiple elements found for {selector}. Specify with >> n notation"
+            if first_only:
+                locator = locator.first
+            return locator, None
         except Exception as e:
-            print(f"Worker {self.worker_id} Error in get_locator: {e}")
-            return [None, str(e)]
+            return None, f"Error getting locator: {str(e)}"
 
-    async def step(self):
-        """Run one iteration of the worker loop, returning True if still active, False if done."""
-        if self.client is None:
+    async def step(self) -> bool:
+        """Execute one step of the worker's operation."""
+        if not self.client:
             await self.setup_client()
 
-        tool_dict = {
+        tools = {
             "move_to_url": self.move_to_url,
             "get_url_contents": self.get_url_contents,
             "send_keys_to_element": self.send_keys_to_element,
@@ -276,83 +228,102 @@ Actions:
             "move_and_click_at_page_position": self.move_and_click_at_page_position
         }
 
-        curr_time = time.time()
+        # Request input if not waiting or running
+        if not self.waiting_for_input and not self.is_running:
+            print(f"Worker {self.worker_id} awaiting input...")
+            self.request_queue.put(self.worker_id)
+            self.waiting_for_input = True
+            await asyncio.sleep(0.1)  # Ensure queue is processed
+            return True
 
-        if self.done:
-            if not self.waiting_for_input:
-                print(f"Worker {self.worker_id} awaiting user input...")
-                self.request_queue.put(self.worker_id)
-                self.waiting_for_input = True
-
+        # Process input if waiting
+        if self.waiting_for_input:
             try:
-                user_input = self.input_queue.get_nowait()
-                if user_input.lower() == 'quit':
+                print(f"Worker {self.worker_id} waiting for input, queue size: {self.input_queue.qsize()}")
+                user_input = await self.input_queue.get()
+                print(f"Worker {self.worker_id} got input: {user_input}")
+                if user_input.lower() == "quit":
+                    print(f"Worker {self.worker_id} quitting")
                     return False
-                print(f"{self.worker_id} received user input")
-                self.done = False
                 self.waiting_for_input = False
+                self.is_running = True
                 self.messages.add_user_text(user_input)
+
+                # Add screenshot with initial input
+                if self.api != "ollama":
+                    await self.page.screenshot(path=f'browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
+                    self.messages.add_user_with_image("Browser snapshot", f"browser_{self.worker_id}.jpeg")
+
+                # Initial API call after input
                 response = await self.client.chat.completions.create(
-                    model=self.MODEL,
+                    model=self.model,
                     messages=self.messages.get_messages_for_api(),
                     tools=functions,
                     tool_choice="auto",
                     temperature=0.0,
                     parallel_tool_calls=False
                 )
-                print(f"Worker {self.worker_id} Response: {response}")
-                print(f"Worker {self.worker_id} Content: {response.choices[0].message.content}")
+                content = response.choices[0].message.content
+                print(f"Worker {self.worker_id} Response: {content}")
 
-                if response.choices[0].message.content and len(response.choices[0].message.content.strip()) > 0:
-                    self.messages.add_assistant_text(response.choices[0].message.content)
+                if content:
+                    self.messages.add_assistant_text(content)
 
                 if response.choices[0].message.tool_calls:
-                    for tool_call in response.choices[0].message.tool_calls:
-                        function_name = tool_call.function.name
-                        print(f"Worker {self.worker_id} Call: {function_name}")
-                        function_args = json.loads(tool_call.function.arguments)
-                        result = await tool_dict[function_name](**function_args)
-                        print(f"Worker {self.worker_id} Result: {result}")
-                        self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
-                        self.messages.add_tool_response(tool_call.id, result, function_name)
-                        break
-                else:
-                    self.done = True
-            except queue.Empty:
-                pass  # Still waiting for input
-
-        elif self.api != "ollama":
-            await self.page.screenshot(path=f'browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
-            self.messages.add_user_with_image("Browser snapshot", f"browser_{self.worker_id}.jpeg")
-            response = await self.client.chat.completions.create(
-                model=self.MODEL,
-                messages=self.messages.get_messages_for_api(),
-                tools=functions,
-                tool_choice="auto",
-                temperature=0.0,
-                parallel_tool_calls=False
-            )
-            print(f"Worker {self.worker_id} Response: {response}")
-            print(f"Worker {self.worker_id} Content: {response.choices[0].message.content}")
-
-            if response.choices[0].message.content and len(response.choices[0].message.content.strip()) > 0:
-                self.messages.add_assistant_text(response.choices[0].message.content)
-
-            if response.choices[0].message.tool_calls:
-                for tool_call in response.choices[0].message.tool_calls:
+                    tool_call = response.choices[0].message.tool_calls[0]
                     function_name = tool_call.function.name
-                    print(f"Worker {self.worker_id} Call: {function_name}")
-                    function_args = json.loads(tool_call.function.arguments)
-                    result = await tool_dict[function_name](**function_args)
-                    print(f"Worker {self.worker_id} Result: {result}")
+                    args = json.loads(tool_call.function.arguments)
+                    result = await tools[function_name](**args)
+                    print(f"Worker {self.worker_id} Tool result: {result}")
                     self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
                     self.messages.add_tool_response(tool_call.id, result, function_name)
-                    break
-            else:
-                self.done = True
+                else:
+                    self.is_running = False
+                    self.waiting_for_input = False  # Reset to request input
 
-        self.last_time = curr_time
-        elapsed_time = curr_time - self.last_time
-        print(f"Worker {self.worker_id} Elapsed: {elapsed_time:.2f}s")
-        self.messages.trim_history(max_messages=self.MAX_MESSAGES)
+            except Exception as e:
+                print(f"Worker {self.worker_id} Error processing input: {e}")
+                self.is_running = False
+                self.waiting_for_input = False
+                await asyncio.sleep(0.1)
+                return True
+
+        # Continue multi-step execution if running
+        elif self.is_running:
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=self.messages.get_messages_for_api(),
+                    tools=functions,
+                    tool_choice="auto",
+                    temperature=0.0,
+                    parallel_tool_calls=False
+                )
+                content = response.choices[0].message.content
+                print(f"Worker {self.worker_id} Response: {content}")
+
+                if content:
+                    self.messages.add_assistant_text(content)
+
+                if response.choices[0].message.tool_calls:
+                    tool_call = response.choices[0].message.tool_calls[0]
+                    function_name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    result = await tools[function_name](**args)
+                    print(f"Worker {self.worker_id} Tool result: {result}")
+                    self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
+                    self.messages.add_tool_response(tool_call.id, result, function_name)
+                else:
+                    self.is_running = False
+                    self.waiting_for_input = False  # Reset to request input
+
+            except Exception as e:
+                print(f"Worker {self.worker_id} Error in multi-step execution: {e}")
+                self.is_running = False
+                self.waiting_for_input = False
+                await asyncio.sleep(0.1)
+                return True
+
+        self.messages.trim_history(max_messages=self.max_messages)
+        await asyncio.sleep(0.1)  # Prevent tight looping
         return True
