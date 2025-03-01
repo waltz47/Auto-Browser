@@ -251,8 +251,8 @@ Steps:
 
                 # Add screenshot with initial input
                 if self.api != "ollama":
-                    await self.page.screenshot(path=f'browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
-                    self.messages.add_user_with_image("Browser snapshot", f"browser_{self.worker_id}.jpeg")
+                    await self.page.screenshot(path=f'snaps/browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
+                    self.messages.add_user_with_image("Browser snapshot", f"snaps/browser_{self.worker_id}.jpeg")
 
                 # Initial API call after input
                 response = await self.client.chat.completions.create(

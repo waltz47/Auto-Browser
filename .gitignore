@@ -11,3 +11,5 @@ scripts/custom.log
 *.jpeg
 __pycache__
 __pycache__/*
+snaps
+snaps/*
