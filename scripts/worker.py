@@ -29,7 +29,7 @@ class Worker:
         self.messages = self._init_message_history()
         self.is_running = True
         self.waiting_for_input = False
-
+        self.current_task = "Initializing"
     def set_input_queue(self, input_queue):
         """Set the input queue for the worker."""
         self.input_queue = input_queue

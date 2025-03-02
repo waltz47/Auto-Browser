@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nyx Dashboard</title>
+    <style>
+        table {
+            width: 80%;
+            margin: 20px auto;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        img {
+            max-width: 200px;
+            height: auto;
+        }
+        .status-indicator {
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #f8f8f8;
+            border-left: 5px solid #ccc;
+        }
+        .connected {
+            border-left-color: #4CAF50;
+        }
+        .disconnected {
+            border-left-color: #F44336;
+        }
+    </style>
+</head>
+<body>
+    <h1>Nyx Worker Dashboard</h1>
+    <div id="connection-status" class="status-indicator disconnected">
+        Connection status: Disconnected
+    </div>
+    <table id="worker-table">
+        <thead>
+            <tr>
+                <th>Worker ID</th>
+                <th>Task</th>
+                <th>Active</th>
+                <th>Screenshot</th>
+                <th>Last Updated</th>
+            </tr>
+        </thead>
+        <tbody id="worker-status">
+            <!-- Worker status rows will be added here dynamically -->
+        </tbody>
+    </table>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script type="text/javascript">
+        console.log('Script loaded, attempting to connect to SocketIO...');
+        
+        // Set up SocketIO with reconnection options
+        var socket = io.connect('http://127.0.0.1:5000', {
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000
+        });
+        
+        // Create an object to track workers we've already seen
+        var workerRows = {};
+        var statusDiv = document.getElementById('connection-status');
+        
+        socket.on('connect', function() {
+            console.log('SocketIO connected successfully');
+            statusDiv.innerHTML = 'Connection status: Connected';
+            statusDiv.className = 'status-indicator connected';
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('SocketIO disconnected');
+            statusDiv.innerHTML = 'Connection status: Disconnected - Attempting to reconnect...';
+            statusDiv.className = 'status-indicator disconnected';
+        });
+        
+        socket.on('reconnecting', function(attemptNumber) {
+            console.log('Attempting to reconnect... Attempt #' + attemptNumber);
+            statusDiv.innerHTML = 'Connection status: Reconnecting (Attempt #' + attemptNumber + ')';
+        });
+        
+        socket.on('reconnect', function() {
+            console.log('Reconnected successfully');
+            statusDiv.innerHTML = 'Connection status: Reconnected';
+            statusDiv.className = 'status-indicator connected';
+        });
+        
+        socket.on('worker_update', function(data) {
+            console.log('Received worker_update event with data:', data);
+            updateWorkerStatus(data);
+        });
+        
+        socket.on('error', function(error) {
+            console.log('SocketIO error:', error);
+            statusDiv.innerHTML = 'Connection status: Error - ' + error;
+            statusDiv.className = 'status-indicator disconnected';
+        });
+        
+        socket.on('connect_error', function(error) {
+            console.log('SocketIO connection error:', error);
+            statusDiv.innerHTML = 'Connection status: Connection Error - ' + error;
+            statusDiv.className = 'status-indicator disconnected';
+        });
+        
+        function updateWorkerStatus(data) {
+            if (!data || !data.worker_id) {
+                console.error('Invalid worker data received', data);
+                return;
+            }
+            
+            console.log('Updating table with data for worker:', data.worker_id);
+            var tbody = document.getElementById('worker-status');
+            if (!tbody) {
+                console.error('tbody element not found!');
+                return;
+            }
+            
+            var workerId = data.worker_id;
+            
+            // Check if we already have a row for this worker
+            if (workerRows[workerId]) {
+                // Update existing row
+                var row = workerRows[workerId];
+                var cells = row.getElementsByTagName('td');
+                
+                if (cells.length >= 5) {
+                    cells[1].textContent = data.task || 'N/A';
+                    cells[2].textContent = data.active !== undefined ? data.active : 'N/A';
+                    cells[3].innerHTML = `<img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot">`;
+                    cells[4].textContent = data.timestamp || 'N/A';
+                    console.log('Updated existing row for worker', workerId);
+                } else {
+                    console.error('Row cells not found for worker', workerId);
+                    // Recreate the row as a fallback
+                    recreateRow();
+                }
+            } else {
+                // Create new row for this worker
+                recreateRow();
+            }
+            
+            function recreateRow() {
+                var row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${data.worker_id || 'N/A'}</td>
+                    <td>${data.task || 'N/A'}</td>
+                    <td>${data.active !== undefined ? data.active : 'N/A'}</td>
+                    <td><img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot"></td>
+                    <td>${data.timestamp || 'N/A'}</td>
+                `;
+                tbody.appendChild(row);
+                
+                // Store reference to this row for future updates
+                workerRows[workerId] = row;
+                console.log('Created new row for worker', workerId);
+            }
+        }
+    </script>
+</body>
+</html>
