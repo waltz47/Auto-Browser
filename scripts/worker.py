@@ -30,6 +30,10 @@ class Worker:
         self.is_running = True
         self.waiting_for_input = False
 
+    def set_input_queue(self, input_queue):
+        """Set the input queue for the worker."""
+        self.input_queue = input_queue
+
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
         try:
@@ -64,7 +68,8 @@ Steps:
 7. get_url_contents() and extract answer
 
 {custom_instructions}'''
-        print(f"Worker {self.worker_id} System Prompt:\n{system_prompt}")
+        # print(f"Worker {self.worker_id} System Prompt:\n{system_prompt}")
+        print(f"{self.worker_id} initialized")
         return MessageHistory(system_prompt)
 
     async def setup_client(self):
@@ -203,9 +208,9 @@ Steps:
         try:
             locator = self.page.locator(selector)
             count = await locator.count()
-            if count == 0:
+            if (count == 0):
                 return None, "Invalid XPath: No elements found"
-            if count > 1 and not first_only:
+            if (count > 1 and not first_only):
                 return None, f"Multiple elements found for {selector}. Specify with >> n notation"
             if first_only:
                 locator = locator.first
@@ -227,6 +232,10 @@ Steps:
             "highlight_element": self.highlight_element,
             "move_and_click_at_page_position": self.move_and_click_at_page_position
         }
+
+        if not self.input_queue:
+            print(f"Worker {self.worker_id}: Input queue not set.")
+            return False
 
         # Request input if not waiting or running
         if not self.waiting_for_input and not self.is_running:
@@ -250,9 +259,11 @@ Steps:
                 self.messages.add_user_text(user_input)
 
                 # Add screenshot with initial input
-                if self.api != "ollama":
+                if self.api != "ollama" and str(self.enable_vision) != "0":
                     await self.page.screenshot(path=f'snaps/browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
                     self.messages.add_user_with_image("Browser snapshot", f"snaps/browser_{self.worker_id}.jpeg")
+
+                print(self.messages.get_messages_for_api())
 
                 # Initial API call after input
                 response = await self.client.chat.completions.create(

@@ -9,13 +9,10 @@ from nyx import Nyx
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument( "--csv_input",default="input/research.csv", help="CSV file containing inputs")
+    # parser.add_argument("--command", required=True, help="Command to execute")
     args = parser.parse_args()
     
-    df = pd.read_csv(str(args.csv_input))
-    n = len(df)
-    input_list = list(df['tasks'])
-    print(f"Tasks: {input_list}")
-    nyx = Nyx(num_workers=int(n))
-    nyx.input_list = input_list
+    nyx = Nyx()
+    initial_input = input("Enter input: ")
+    asyncio.run(nyx.handle_initial_input(initial_input))
     asyncio.run(nyx.start())
