@@ -3,34 +3,89 @@
 <head>
     <title>Nyx Dashboard</title>
     <style>
-        table {
-            width: 80%;
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f4f8;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        h1 {
+            color: #2c3e50;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        #dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            width: 90%;
             margin: 20px auto;
-            border-collapse: collapse;
         }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 8px;
-            text-align: left;
+
+        .worker-container {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            transition: transform 0.3s ease;
         }
-        th {
-            background-color: #f2f2f2;
+
+        .worker-container:hover {
+            transform: translateY(-5px);
         }
+
+        .worker-header {
+            background-color: #34495e;
+            color: white;
+            padding: 12px;
+            text-align: center;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .worker-content {
+            padding: 15px;
+        }
+
         img {
-            max-width: 200px;
+            max-width: 100%;
             height: auto;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease;
         }
+
+        img:hover {
+            transform: scale(1.05);
+        }
+
         .status-indicator {
-            padding: 10px;
-            margin: 10px 0;
-            background-color: #f8f8f8;
-            border-left: 5px solid #ccc;
+            display: inline-block;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: 500;
+            color: white;
+            margin-bottom: 1rem;
         }
+
         .connected {
-            border-left-color: #4CAF50;
+            background-color: #27ae60;
         }
+
         .disconnected {
-            border-left-color: #F44336;
+            background-color: #c0392b;
+        }
+
+        #connection-status {
+            margin-top: 2rem;
         }
     </style>
 </head>
@@ -39,25 +94,13 @@
     <div id="connection-status" class="status-indicator disconnected">
         Connection status: Disconnected
     </div>
-    <table id="worker-table">
-        <thead>
-            <tr>
-                <th>Worker ID</th>
-                <th>Task</th>
-                <th>Active</th>
-                <th>Screenshot</th>
-                <th>Last Updated</th>
-            </tr>
-        </thead>
-        <tbody id="worker-status">
-            <!-- Worker status rows will be added here dynamically -->
-        </tbody>
-    </table>
+    <div id="dashboard-grid">
+        <!-- Worker containers will be added here dynamically -->
+    </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <script type="text/javascript">
         console.log('Script loaded, attempting to connect to SocketIO...');
         
-        // Set up SocketIO with reconnection options
         var socket = io.connect('http://127.0.0.1:5000', {
             reconnection: true,
             reconnectionAttempts: Infinity,
@@ -66,30 +109,30 @@
             timeout: 20000
         });
         
-        // Create an object to track workers we've already seen
-        var workerRows = {};
+        var workerContainers = {};
         var statusDiv = document.getElementById('connection-status');
+        var dashboardGrid = document.getElementById('dashboard-grid');
         
         socket.on('connect', function() {
             console.log('SocketIO connected successfully');
-            statusDiv.innerHTML = 'Connection status: Connected';
+            statusDiv.textContent = 'Connection status: Connected';
             statusDiv.className = 'status-indicator connected';
         });
         
         socket.on('disconnect', function() {
             console.log('SocketIO disconnected');
-            statusDiv.innerHTML = 'Connection status: Disconnected - Attempting to reconnect...';
+            statusDiv.textContent = 'Connection status: Disconnected - Attempting to reconnect...';
             statusDiv.className = 'status-indicator disconnected';
         });
         
         socket.on('reconnecting', function(attemptNumber) {
             console.log('Attempting to reconnect... Attempt #' + attemptNumber);
-            statusDiv.innerHTML = 'Connection status: Reconnecting (Attempt #' + attemptNumber + ')';
+            statusDiv.textContent = 'Connection status: Reconnecting (Attempt #' + attemptNumber + ')';
         });
         
         socket.on('reconnect', function() {
             console.log('Reconnected successfully');
-            statusDiv.innerHTML = 'Connection status: Reconnected';
+            statusDiv.textContent = 'Connection status: Reconnected';
             statusDiv.className = 'status-indicator connected';
         });
         
@@ -100,13 +143,13 @@
         
         socket.on('error', function(error) {
             console.log('SocketIO error:', error);
-            statusDiv.innerHTML = 'Connection status: Error - ' + error;
+            statusDiv.textContent = 'Connection status: Error - ' + error;
             statusDiv.className = 'status-indicator disconnected';
         });
         
         socket.on('connect_error', function(error) {
             console.log('SocketIO connection error:', error);
-            statusDiv.innerHTML = 'Connection status: Connection Error - ' + error;
+            statusDiv.textContent = 'Connection status: Connection Error - ' + error;
             statusDiv.className = 'status-indicator disconnected';
         });
         
@@ -116,52 +159,24 @@
                 return;
             }
             
-            console.log('Updating table with data for worker:', data.worker_id);
-            var tbody = document.getElementById('worker-status');
-            if (!tbody) {
-                console.error('tbody element not found!');
-                return;
-            }
-            
             var workerId = data.worker_id;
             
-            // Check if we already have a row for this worker
-            if (workerRows[workerId]) {
-                // Update existing row
-                var row = workerRows[workerId];
-                var cells = row.getElementsByTagName('td');
-                
-                if (cells.length >= 5) {
-                    cells[1].textContent = data.task || 'N/A';
-                    cells[2].textContent = data.active !== undefined ? data.active : 'N/A';
-                    cells[3].innerHTML = `<img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot">`;
-                    cells[4].textContent = data.timestamp || 'N/A';
-                    console.log('Updated existing row for worker', workerId);
-                } else {
-                    console.error('Row cells not found for worker', workerId);
-                    // Recreate the row as a fallback
-                    recreateRow();
-                }
-            } else {
-                // Create new row for this worker
-                recreateRow();
+            if (!workerContainers[workerId]) {
+                workerContainers[workerId] = document.createElement('div');
+                workerContainers[workerId].className = 'worker-container';
+                dashboardGrid.appendChild(workerContainers[workerId]);
             }
             
-            function recreateRow() {
-                var row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${data.worker_id || 'N/A'}</td>
-                    <td>${data.task || 'N/A'}</td>
-                    <td>${data.active !== undefined ? data.active : 'N/A'}</td>
-                    <td><img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot"></td>
-                    <td>${data.timestamp || 'N/A'}</td>
-                `;
-                tbody.appendChild(row);
-                
-                // Store reference to this row for future updates
-                workerRows[workerId] = row;
-                console.log('Created new row for worker', workerId);
-            }
+            var container = workerContainers[workerId];
+            container.innerHTML = `
+                <div class="worker-header">Worker ${data.worker_id || 'N/A'}</div>
+                <div class="worker-content">
+                    <img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot">
+                    <p>Task: ${data.task || 'N/A'}</p>
+                    <p>Active: ${data.active !== undefined ? data.active : 'N/A'}</p>
+                    <p>Last Updated: ${data.timestamp || 'N/A'}</p>
+                </div>
+            `;
         }
     </script>
 </body>

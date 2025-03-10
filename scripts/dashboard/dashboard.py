@@ -42,7 +42,7 @@ class DashboardNyx(Nyx):
                 if not active:
                     print(f"Worker {worker.worker_id} has quit.")
                     break
-                await asyncio.sleep(5)
+                await asyncio.sleep(2) # Reduced to 2 seconds
             except Exception as e:
                 print(f"Worker {worker.worker_id} error: {e}")
                 break
