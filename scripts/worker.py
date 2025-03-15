@@ -5,34 +5,43 @@ import asyncio
 from playwright.async_api import Page
 from openai import AsyncOpenAI
 from typing import Dict, Any
+import base64
+import traceback
 
 # Assuming these imports remain necessary from your project structure
 # sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web import *
-from tools import *
+from tools import functions as web_tools  # Import web tools from tools.py
 from metrics import *
 from messages import *
 from handler import *
 
 class Worker:
-    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int):
+    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None):
         """Initialize a worker with a browser page and configuration."""
         self.page = page
         self.worker_id = worker_id
         self.request_queue = request_queue  # Sync queue for signaling input need
         self.input_queue = None  # Will be set to asyncio.Queue by Nyx
+        self.error_queue = None  # Will be set to asyncio.Queue by Nyx for error reporting
         self.api = api
         self.model = model
         self.max_messages = max_messages
         self.element_cache: Dict[str, str] = {}
         self.client = None
-        self.messages = self._init_message_history()
         self.is_running = True
         self.waiting_for_input = False
-        self.current_task = "Initializing"
-    def set_input_queue(self, input_queue):
-        """Set the input queue for the worker."""
+        self.current_task = "Initializing"  # Initialize current_task before creating message history
+        self.error_state = None
+        self.tools = tools or []  # Initialize tools with provided tools or empty list
+        self.api_call_attempts = 0  # Initialize counter for API call attempts
+        self.processed_tool_call_ids = []  # Initialize tracking for processed tool call IDs
+        self.messages = self._init_message_history()  # Now call _init_message_history after current_task is set
+
+    def set_queues(self, input_queue, error_queue):
+        """Set the input and error queues for the worker."""
         self.input_queue = input_queue
+        self.error_queue = error_queue
 
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
@@ -43,47 +52,67 @@ class Worker:
             custom_instructions = ""
             print(f"Worker {self.worker_id}: No custom instructions")
 
-        system_prompt = f'''You are a helpful assistant designed to perform web actions via tools.
+        # Define the available tools for the worker
+        tools_description = """
+You have access to the following tools to help you navigate and interact with web pages:
 
-Available tools:
-- move_to_url: Navigate to a specific URL.
-- get_url_contents: Retrieve current page contents.
-- send_keys_to_element: Input text into an element (requires xpath).
-- call_submit: Submit a form (requires xpath).
-- click_element: Click an element (requires xpath).
-- highlight_element: Highlight an element (requires xpath).
-- move_and_click_at_page_position: Click at specific coordinates.
+1. move_to_url(url: str) - Navigate to a specific URL
+2. get_url_contents() - Get the contents of the current page
+3. send_keys_to_element(xpathSelector: str, keys: str) - Send text to an element
+4. call_submit(xpathSelector: str) - Submit a form
+5. click_element(xpathSelector: str) - Click on an element
+6. highlight_element(xpathSelector: str) - Highlight an element for visibility
+7. move_and_click_at_page_position(x: float, y: float) - Click at specific coordinates
 
-Use provided xpath selectors from JSON data. For multiple matches, select based on context or error hints.
+When you complete your task, include "TASK_COMPLETE" in your response.
+If you need user input, include "WAITING_FOR_INPUT" in your response.
+"""
 
-Example:
-Query: "Check yesterday's World Cup winner"
-Steps:
-1. move_to_url("https://google.com")
-2. get_url_contents()
-3. send_keys_to_element(search bar xpath, "Who won the World Cup yesterday?")
-4. call_submit(search bar xpath)
-5. get_url_contents()
-6. click_element(result link xpath)
-7. get_url_contents() and extract answer
+        # Get current task with a fallback for safety
+        current_task = getattr(self, 'current_task', "Not yet specified")
+
+        system_prompt = f'''You are a general purpose AI agent capable of performing web-based tasks. You can browse websites, search for information, and interact with web elements.
+
+Your current task is: {current_task}
+
+Instructions for completing tasks:
+1. Always start by navigating to a relevant website using move_to_url
+2. After each navigation, use get_url_contents to analyze the page
+3. Use other tools as needed to navigate and interact with elements
+4. Be thorough and methodical in your task completion
+5. Include "TASK_COMPLETE" only when you've successfully completed your task
+6. If you need additional information or user input, include "WAITING_FOR_INPUT"
+
+{tools_description}
 
 {custom_instructions}'''
-        # print(f"Worker {self.worker_id} System Prompt:\n{system_prompt}")
-        print(f"{self.worker_id} initialized")
+        print(f"Worker {self.worker_id} initialized with general purpose configuration")
         return MessageHistory(system_prompt)
 
     async def setup_client(self):
         """Set up the OpenAI client based on API configuration."""
-        api_key = os.environ.get('XAI_API_KEY')
-        if self.api == "xai" and not api_key:
-            print(f"Worker {self.worker_id}: XAI_API_KEY not set.")
-            sys.exit(1)
-        if self.api == "openai":
-            self.client = AsyncOpenAI()
-        elif self.api == "xai":
-            self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        elif self.api == "ollama":
-            self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
+        try:
+            if self.client is not None:
+                return  # Client already initialized
+                
+            if self.api == "openai":
+                self.client = AsyncOpenAI()
+            elif self.api == "xai":
+                api_key = os.environ.get('XAI_API_KEY')
+                if not api_key:
+                    raise ValueError("XAI_API_KEY not set")
+                self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+            elif self.api == "ollama":
+                self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
+            else:
+                raise ValueError(f"Unsupported API type: {self.api}")
+                
+            print(f"Worker {self.worker_id}: API client initialized successfully")
+        except Exception as e:
+            error_msg = f"Failed to initialize API client: {str(e)}"
+            print(f"Worker {self.worker_id}: {error_msg}")
+            await self.report_error('api_initialization_error', error_msg)
+            raise
 
     async def move_to_url(self, url: str) -> str:
         """Navigate to a URL and return page contents."""
@@ -193,14 +222,26 @@ Steps:
             print(f"Worker {self.worker_id} Error highlighting: {e}")
             return "Error highlighting element"
 
-    async def move_and_click_at_page_position(self, x: float, y: float) -> str:
-        """Move to and click at specific page coordinates."""
+    async def move_and_click_at_page_position(self, x=None, y=None, location_x=None, location_y=None) -> str:
+        """Move to and click at specific page coordinates.
+        
+        Supports both parameter formats:
+        - x, y (from tools.py)
+        - location_x, location_y (from older formats)
+        """
         try:
-            await self.page.mouse.move(x, y)
-            await self.page.mouse.click(x, y)
-            return f"Worker {self.worker_id}: Clicked at ({x}, {y})"
+            # Use whichever parameters are provided
+            x_coord = x if x is not None else location_x
+            y_coord = y if y is not None else location_y
+            
+            if x_coord is None or y_coord is None:
+                return f"Worker {self.worker_id}: Error - Missing coordinates for clicking"
+                
+            await self.page.mouse.move(x_coord, y_coord)
+            await self.page.mouse.click(x_coord, y_coord)
+            return f"Worker {self.worker_id}: Clicked at ({x_coord}, {y_coord})"
         except Exception as e:
-            return f"Worker {self.worker_id} Error clicking at ({x}, {y}): {str(e)}"
+            return f"Worker {self.worker_id} Error clicking at position: {str(e)}"
 
     async def _get_locator(self, xpathSelector: str, first_only=False) -> tuple[Any, str]:
         """Retrieve a locator for an xpath, handling multiple matches."""
@@ -218,123 +259,231 @@ Steps:
         except Exception as e:
             return None, f"Error getting locator: {str(e)}"
 
+    async def report_error(self, error_type: str, error_message: str):
+        """Report an error to the orchestrator."""
+        if self.error_queue:
+            error_data = {
+                'worker_id': self.worker_id,
+                'error_type': error_type,
+                'error_message': error_message,
+                'task': self.current_task,
+                'timestamp': time.time()
+            }
+            await self.error_queue.put(error_data)
+            self.error_state = error_data
+        else:
+            print(f"Worker {self.worker_id}: Error queue not set, cannot report error: {error_message}")
+
     async def step(self) -> bool:
-        """Execute one step of the worker's operation."""
-        if not self.client:
-            await self.setup_client()
-
-        tools = {
-            "move_to_url": self.move_to_url,
-            "get_url_contents": self.get_url_contents,
-            "send_keys_to_element": self.send_keys_to_element,
-            "call_submit": self.call_submit,
-            "click_element": self.click_element,
-            "highlight_element": self.highlight_element,
-            "move_and_click_at_page_position": self.move_and_click_at_page_position
-        }
-
-        if not self.input_queue:
-            print(f"Worker {self.worker_id}: Input queue not set.")
-            return False
-
-        # Request input if not waiting or running
-        if not self.waiting_for_input and not self.is_running:
-            print(f"Worker {self.worker_id} awaiting input...")
-            self.request_queue.put(self.worker_id)
-            self.waiting_for_input = True
-            await asyncio.sleep(0.1)  # Ensure queue is processed
-            return True
-
-        # Process input if waiting
-        if self.waiting_for_input:
-            try:
-                print(f"Worker {self.worker_id} waiting for input, queue size: {self.input_queue.qsize()}")
+        """Execute one step of the worker's task."""
+        try:
+            if not self.input_queue:
+                await self.report_error('configuration_error', 'Input queue not set')
+                return False
+                
+            if self.waiting_for_input:
+                if self.input_queue.empty():
+                    self.request_queue.put(self.worker_id)
+                    await asyncio.sleep(0.1)
+                    return True
+                    
                 user_input = await self.input_queue.get()
-                print(f"Worker {self.worker_id} got input: {user_input}")
-                if user_input.lower() == "quit":
-                    print(f"Worker {self.worker_id} quitting")
-                    return False
                 self.waiting_for_input = False
-                self.is_running = True
+                self.current_task = user_input
+                print(f"Worker {self.worker_id} received input: {user_input}")
+                # Add the user input to the message history
                 self.messages.add_user_text(user_input)
-
-                # Add screenshot with initial input
-                if self.api != "ollama" and str(self.enable_vision) != "0":
-                    await self.page.screenshot(path=f'snaps/browser_{self.worker_id}.jpeg', type="jpeg", full_page=False, quality=100)
-                    self.messages.add_user_with_image("Browser snapshot", f"snaps/browser_{self.worker_id}.jpeg")
-
-                print(self.messages.get_messages_for_api())
-
-                # Initial API call after input
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=self.messages.get_messages_for_api(),
-                    tools=functions,
-                    tool_choice="auto",
-                    temperature=0.0,
-                    parallel_tool_calls=False
-                )
-                content = response.choices[0].message.content
-                print(f"Worker {self.worker_id} Response: {content}")
-
-                if content:
-                    self.messages.add_assistant_text(content)
-
-                if response.choices[0].message.tool_calls:
-                    tool_call = response.choices[0].message.tool_calls[0]
-                    function_name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments)
-                    result = await tools[function_name](**args)
-                    print(f"Worker {self.worker_id} Tool result: {result}")
-                    self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
-                    self.messages.add_tool_response(tool_call.id, result, function_name)
-                else:
-                    self.is_running = False
-                    self.waiting_for_input = False  # Reset to request input
-
-            except Exception as e:
-                print(f"Worker {self.worker_id} Error processing input: {e}")
-                self.is_running = False
-                self.waiting_for_input = False
-                await asyncio.sleep(0.1)
+                return True  # Return after getting input to process it in next step
+                
+            # Add a retry counter to prevent infinite loops
+            if not hasattr(self, 'api_call_attempts'):
+                self.api_call_attempts = 0
+                
+            # If we've tried too many times with failures, force waiting for input
+            if self.api_call_attempts > 3:
+                print(f"Worker {self.worker_id}: Too many API call attempts, requesting user input")
+                self.waiting_for_input = True
+                self.api_call_attempts = 0
+                self.messages.add_assistant_message("I'm having trouble with this task. WAITING_FOR_INPUT - Please provide more specific instructions.")
                 return True
-
-        # Continue multi-step execution if running
-        elif self.is_running:
+            
             try:
+                print(f"Worker {self.worker_id}: Sending messages to API (attempt {self.api_call_attempts + 1})")
+                self.api_call_attempts += 1
+                
+                # If no tools provided, use web_tools from tools.py
+                if not self.tools:
+                    print(f"Worker {self.worker_id}: No tools provided, using web_tools from tools.py")
+                    self.tools = web_tools
+                
+                # Use non-streaming API call for simplicity
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     messages=self.messages.get_messages_for_api(),
-                    tools=functions,
+                    tools=self.tools,
                     tool_choice="auto",
-                    temperature=0.0,
-                    parallel_tool_calls=False
+                    temperature=0.7,
+                    stream=False  # Non-streaming mode
                 )
-                content = response.choices[0].message.content
-                print(f"Worker {self.worker_id} Response: {content}")
-
-                if content:
-                    self.messages.add_assistant_text(content)
-
-                if response.choices[0].message.tool_calls:
-                    tool_call = response.choices[0].message.tool_calls[0]
-                    function_name = tool_call.function.name
-                    args = json.loads(tool_call.function.arguments)
-                    result = await tools[function_name](**args)
-                    print(f"Worker {self.worker_id} Tool result: {result}")
-                    self.messages.add_tool_call(tool_call.id, function_name, tool_call.function.arguments)
-                    self.messages.add_tool_response(tool_call.id, result, function_name)
+                
+                # API call succeeded, reset the attempts counter
+                self.api_call_attempts = 0
+                
+                # Extract content and tool calls from the complete response
+                content = response.choices[0].message.content or ""
+                tool_calls = response.choices[0].message.tool_calls or []
+                
+                print(f"Worker {self.worker_id}: Received response with {len(content)} chars content and {len(tool_calls)} tool calls")
+                
+                # Process the response if it has content or tool calls
+                if content or tool_calls:
+                    # First, add the assistant message with content and tool calls
+                    if tool_calls:
+                        # Create message with both content and tool calls
+                        message = Message(
+                            role="assistant",
+                            content=content,
+                            tool_calls=[{
+                                "id": tc.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": tc.function.arguments
+                                }
+                            } for tc in tool_calls]
+                        )
+                        self.messages.add_message(message)
+                    else:
+                        # No tool calls, just add the content
+                        self.messages.add_assistant_message(content)
+                    
+                    # Process tool calls if present
+                    valid_tool_calls = False
+                    
+                    # Track IDs processed in this round
+                    current_round_ids = []
+                    
+                    for tool_call in tool_calls:
+                        tool_call_id = tool_call.id
+                        function_name = tool_call.function.name
+                        arguments = tool_call.function.arguments
+                        
+                        # Skip if we've already processed this tool call ID
+                        if tool_call_id in self.processed_tool_call_ids:
+                            print(f"Worker {self.worker_id}: Skipping already processed tool call {tool_call_id}")
+                            continue
+                            
+                        # Track this ID for processing
+                        current_round_ids.append(tool_call_id)
+                        
+                        # Handle missing arguments with defaults based on function
+                        if not arguments or arguments.strip() == '':
+                            print(f"Worker {self.worker_id}: Missing arguments in tool call: {tool_call}")
+                            
+                            # Provide default arguments based on function name
+                            if function_name == "get_url_contents":
+                                arguments = "{}"
+                                print(f"Worker {self.worker_id}: Using empty arguments for {function_name}")
+                            elif function_name == "move_to_url":
+                                # If move_to_url has empty args, we can't proceed - add an error response
+                                error_result = f"Error: The move_to_url function requires a URL parameter. Please provide a valid URL."
+                                self.messages.add_tool_response(tool_call_id, error_result, function_name)
+                                continue
+                            else:
+                                # For other functions, add an error response
+                                error_result = f"Error: Missing arguments for {function_name}. Please provide valid arguments."
+                                self.messages.add_tool_response(tool_call_id, error_result, function_name)
+                                continue
+                            
+                        print(f"Worker {self.worker_id} executing tool: {function_name}, args len: {len(arguments)}")
+                        
+                        # Execute the tool function
+                        if hasattr(self, function_name):
+                            try:
+                                tool_function = getattr(self, function_name)
+                                print(f"Worker {self.worker_id}: Parsing arguments for {function_name}: {arguments}")
+                                
+                                # Ensure arguments is valid JSON
+                                args_dict = json.loads(arguments)
+                                print(f"Worker {self.worker_id}: Executing {function_name} with args: {args_dict}")
+                                
+                                result = await tool_function(**args_dict)
+                                print(f"Worker {self.worker_id}: Tool {function_name} executed successfully")
+                                
+                                # Add tool response to message history
+                                self.messages.add_tool_response(tool_call_id, result, function_name)
+                                
+                                # Mark that we've successfully executed at least one tool
+                                valid_tool_calls = True
+                                
+                            except json.JSONDecodeError as je:
+                                error_msg = f"Invalid JSON in tool arguments: {arguments} - Error: {str(je)}"
+                                print(f"Worker {self.worker_id}: {error_msg}")
+                                # Add error response to continue the conversation
+                                error_result = f"Error: Could not parse arguments for {function_name}. Please provide valid JSON."
+                                self.messages.add_tool_response(tool_call_id, error_result, function_name)
+                                continue
+                            except TypeError as te:
+                                error_msg = f"Type error executing tool {function_name} with args {args_dict if 'args_dict' in locals() else 'unknown'}: {str(te)}"
+                                print(f"Worker {self.worker_id}: {error_msg}")
+                                # Add error response to continue the conversation
+                                error_result = f"Error executing {function_name}: {str(te)}. Please check argument types."
+                                self.messages.add_tool_response(tool_call_id, error_result, function_name)
+                                continue
+                            except Exception as e:
+                                error_msg = f"Error executing tool {function_name}: {str(e)}"
+                                print(f"Worker {self.worker_id}: {error_msg}")
+                                # Add error response to continue the conversation
+                                error_result = f"Error executing {function_name}: {str(e)}"
+                                self.messages.add_tool_response(tool_call_id, error_result, function_name)
+                                continue
+                        else:
+                            error_msg = f"Function {function_name} not found"
+                            print(f"Worker {self.worker_id}: {error_msg}")
+                            # Add error response to continue the conversation
+                            error_result = f"Error: Function {function_name} is not available."
+                            self.messages.add_tool_response(tool_call_id, error_result, "error")
+                    
+                    # Update processed tool calls - only add the ones we successfully handled this round
+                    self.processed_tool_call_ids.extend(current_round_ids)
+                    print(f"Worker {self.worker_id}: Updated processed_tool_call_ids, now tracking {len(self.processed_tool_call_ids)} IDs")
+                    
+                    # If no valid tool calls and no meaningful content, request user input after repeated failures
+                    if not valid_tool_calls and not content:
+                        self.api_call_attempts += 1  # Increase attempt counter
+                        print(f"Worker {self.worker_id}: No valid tool calls or content, attempt {self.api_call_attempts}")
+                    
+                    # Only check for task completion markers if there's content
+                    if content:
+                        # Check if task is complete
+                        if "TASK_COMPLETE" in content:
+                            print(f"Worker {self.worker_id} completed task")
+                            return False
+                        
+                        # Set waiting for input flag for next iteration if needed
+                        if "WAITING_FOR_INPUT" in content:
+                            self.waiting_for_input = True
+                    
+                    return True
                 else:
-                    self.is_running = False
-                    self.waiting_for_input = False  # Reset to request input
-
+                    print(f"Worker {self.worker_id}: Empty response, attempt {self.api_call_attempts}")
+                    # If we get empty responses repeatedly, request user input
+                    if self.api_call_attempts >= 3:
+                        print(f"Worker {self.worker_id}: Too many empty responses, requesting user input")
+                        self.waiting_for_input = True
+                        self.api_call_attempts = 0
+                        self.messages.add_assistant_message("I'm having trouble completing this task. WAITING_FOR_INPUT - Please provide more specific instructions or a different URL to explore.")
+                        return True
+                    
+                    await self.report_error('api_error', 'Empty response from API (no content or tool calls)')
+                    return True  # Continue processing despite error to avoid aborting the worker
+                
             except Exception as e:
-                print(f"Worker {self.worker_id} Error in multi-step execution: {e}")
-                self.is_running = False
-                self.waiting_for_input = False
-                await asyncio.sleep(0.1)
-                return True
-
-        self.messages.trim_history(max_messages=self.max_messages)
-        await asyncio.sleep(0.1)  # Prevent tight looping
-        return True
+                await self.report_error('api_error', f'Error in API call: {str(e)}')
+                traceback.print_exc()  # Add traceback for better debugging
+                return True  # Continue processing despite error
+                
+        except Exception as e:
+            await self.report_error('execution_error', f'Error during execution: {str(e)}')
+            traceback.print_exc()  # Add traceback for better debugging
+            return False

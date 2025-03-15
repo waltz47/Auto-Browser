@@ -45,6 +45,51 @@
                     "optional": []
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_agent",
+                "description": "Create a new agent for a specific task. The agent will be assigned a unique ID and can have dependencies on other agents.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_description": {
+                            "type": "string",
+                            "description": "Description of the task for the agent to perform.",
+                            "example_value": "Search for recent news about AI"
+                        },
+                        "dependencies": {
+                            "type": "array",
+                            "description": "List of agent IDs that must complete their tasks before this agent starts.",
+                            "items": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "required": ["task_description"],
+                    "optional": ["dependencies"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "destroy_agent",
+                "description": "Destroy an agent when its task is complete and clean up its resources.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "worker_id": {
+                            "type": "integer",
+                            "description": "The ID of the agent to destroy.",
+                            "example_value": 1
+                        }
+                    },
+                    "required": ["worker_id"],
+                    "optional": []
+                }
+            }
         }
     ]
 }

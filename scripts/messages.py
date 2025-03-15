@@ -164,6 +164,10 @@ class MessageHistory:
         """Add an assistant text message."""
         self.add_message(Message.create_text("assistant", text))
         
+    def add_assistant_message(self, text: str) -> None:
+        """Add an assistant message to the history."""
+        self.add_assistant_text(text)
+        
     def add_tool_call(self, tool_id: str, function_name: str, arguments: str) -> None:
         """Add a tool call message."""
         self.add_message(Message.create_tool_call("assistant", tool_id, function_name, arguments))
@@ -175,6 +179,10 @@ class MessageHistory:
     def get_messages_for_api(self) -> List[Dict[str, Any]]:
         """Get messages in format suitable for API calls."""
         return [msg.to_dict() for msg in self.messages]
+        
+    def get_messages(self) -> List[Dict[str, Any]]:
+        """Get messages in format suitable for API calls (alias for get_messages_for_api)."""
+        return self.get_messages_for_api()
         
     def trim_history(self, max_messages: int) -> None:
         """Trim message history to keep only recent messages if exceeding max length,

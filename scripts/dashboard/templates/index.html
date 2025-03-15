@@ -2,182 +2,274 @@
 <html>
 <head>
     <title>Nyx Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f4f4f8;
-            color: #333;
+            font-family: Arial, sans-serif;
             margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
+            padding: 20px;
+            background: #f0f0f0;
         }
-
-        h1 {
-            color: #2c3e50;
-            margin-top: 2rem;
-            margin-bottom: 1rem;
-        }
-
-        #dashboard-grid {
+        .dashboard-container {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: 1fr 1fr;
             gap: 20px;
-            width: 90%;
-            margin: 20px auto;
+            margin-bottom: 20px;
         }
-
-        .worker-container {
-            background-color: white;
+        #visualization, #task-list {
+            background: white;
             border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
-            transition: transform 0.3s ease;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-
-        .worker-container:hover {
-            transform: translateY(-5px);
+        .node {
+            fill: #fff;
+            stroke: #333;
+            stroke-width: 2px;
         }
-
-        .worker-header {
-            background-color: #34495e;
-            color: white;
-            padding: 12px;
-            text-align: center;
-            font-weight: 600;
-            text-transform: uppercase;
+        .node.error {
+            fill: #ffebee;
+            stroke: #f44336;
         }
-
-        .worker-content {
-            padding: 15px;
+        .node.active {
+            fill: #e3f2fd;
+            stroke: #2196f3;
         }
-
-        img {
-            max-width: 100%;
-            height: auto;
+        .node.completed {
+            fill: #e8f5e9;
+            stroke: #4caf50;
+        }
+        .node.waiting {
+            fill: #fff3e0;
+            stroke: #ff9800;
+        }
+        .node.idle {
+            fill: #f5f5f5;
+            stroke: #9e9e9e;
+        }
+        .link {
+            stroke: #999;
+            stroke-opacity: 0.6;
+            stroke-width: 2px;
+            marker-end: url(#arrowhead);
+        }
+        .error-message {
+            fill: #f44336;
+            font-size: 12px;
+        }
+        .node-label {
+            font-size: 12px;
+            pointer-events: none;
+        }
+        .task-item {
+            padding: 10px;
+            margin: 5px 0;
             border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            transition: transform 0.3s ease;
+            border-left: 4px solid;
         }
-
-        img:hover {
-            transform: scale(1.05);
-        }
-
-        .status-indicator {
-            display: inline-block;
-            padding: 8px 12px;
-            border-radius: 20px;
-            font-size: 0.9em;
-            font-weight: 500;
+        .task-item.error { border-left-color: #f44336; background: #ffebee; }
+        .task-item.active { border-left-color: #2196f3; background: #e3f2fd; }
+        .task-item.completed { border-left-color: #4caf50; background: #e8f5e9; }
+        .task-item.waiting { border-left-color: #ff9800; background: #fff3e0; }
+        .task-item.idle { border-left-color: #9e9e9e; background: #f5f5f5; }
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 16px;
+            border-radius: 4px;
             color: white;
-            margin-bottom: 1rem;
         }
-
-        .connected {
-            background-color: #27ae60;
-        }
-
-        .disconnected {
-            background-color: #c0392b;
-        }
-
-        #connection-status {
-            margin-top: 2rem;
-        }
+        .connection-status.connected { background: #4caf50; }
+        .connection-status.disconnected { background: #f44336; }
     </style>
 </head>
 <body>
-    <h1>Nyx Worker Dashboard</h1>
-    <div id="connection-status" class="status-indicator disconnected">
-        Connection status: Disconnected
+    <div class="connection-status disconnected">Disconnected</div>
+    <div class="dashboard-container">
+        <div id="visualization"></div>
+        <div id="task-list">
+            <h2>Tasks and Workers</h2>
+            <div id="tasks"></div>
+        </div>
     </div>
-    <div id="dashboard-grid">
-        <!-- Worker containers will be added here dynamically -->
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script type="text/javascript">
-        console.log('Script loaded, attempting to connect to SocketIO...');
-        
-        var socket = io.connect('http://127.0.0.1:5000', {
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            timeout: 20000
-        });
-        
-        var workerContainers = {};
-        var statusDiv = document.getElementById('connection-status');
-        var dashboardGrid = document.getElementById('dashboard-grid');
-        
-        socket.on('connect', function() {
-            console.log('SocketIO connected successfully');
-            statusDiv.textContent = 'Connection status: Connected';
-            statusDiv.className = 'status-indicator connected';
-        });
-        
-        socket.on('disconnect', function() {
-            console.log('SocketIO disconnected');
-            statusDiv.textContent = 'Connection status: Disconnected - Attempting to reconnect...';
-            statusDiv.className = 'status-indicator disconnected';
-        });
-        
-        socket.on('reconnecting', function(attemptNumber) {
-            console.log('Attempting to reconnect... Attempt #' + attemptNumber);
-            statusDiv.textContent = 'Connection status: Reconnecting (Attempt #' + attemptNumber + ')';
-        });
-        
-        socket.on('reconnect', function() {
-            console.log('Reconnected successfully');
-            statusDiv.textContent = 'Connection status: Reconnected';
-            statusDiv.className = 'status-indicator connected';
-        });
-        
-        socket.on('worker_update', function(data) {
-            console.log('Received worker_update event with data:', data);
-            updateWorkerStatus(data);
-        });
-        
-        socket.on('error', function(error) {
-            console.log('SocketIO error:', error);
-            statusDiv.textContent = 'Connection status: Error - ' + error;
-            statusDiv.className = 'status-indicator disconnected';
-        });
-        
-        socket.on('connect_error', function(error) {
-            console.log('SocketIO connection error:', error);
-            statusDiv.textContent = 'Connection status: Connection Error - ' + error;
-            statusDiv.className = 'status-indicator disconnected';
-        });
-        
-        function updateWorkerStatus(data) {
-            if (!data || !data.worker_id) {
-                console.error('Invalid worker data received', data);
-                return;
-            }
-            
-            var workerId = data.worker_id;
-            
-            if (!workerContainers[workerId]) {
-                workerContainers[workerId] = document.createElement('div');
-                workerContainers[workerId].className = 'worker-container';
-                dashboardGrid.appendChild(workerContainers[workerId]);
-            }
-            
-            var container = workerContainers[workerId];
-            container.innerHTML = `
-                <div class="worker-header">Worker ${data.worker_id || 'N/A'}</div>
-                <div class="worker-content">
-                    <img src="data:image/png;base64,${data.screenshot || ''}" alt="Screenshot">
-                    <p>Task: ${data.task || 'N/A'}</p>
-                    <p>Active: ${data.active !== undefined ? data.active : 'N/A'}</p>
-                    <p>Last Updated: ${data.timestamp || 'N/A'}</p>
-                </div>
-            `;
+    <script>
+        const socket = io();
+        let svg = d3.select('#visualization')
+            .append('svg')
+            .attr('width', '100%')
+            .attr('height', 600);
+
+        // Add arrow marker definition
+        svg.append('defs').append('marker')
+            .attr('id', 'arrowhead')
+            .attr('viewBox', '-0 -5 10 10')
+            .attr('refX', 20)
+            .attr('refY', 0)
+            .attr('orient', 'auto')
+            .attr('markerWidth', 6)
+            .attr('markerHeight', 6)
+            .attr('xoverflow', 'visible')
+            .append('svg:path')
+            .attr('d', 'M 0,-5 L 10 ,0 L 0,5')
+            .attr('fill', '#999')
+            .style('stroke', 'none');
+
+        const simulation = d3.forceSimulation()
+            .force('link', d3.forceLink().id(d => d.id).distance(100))
+            .force('charge', d3.forceManyBody().strength(-300))
+            .force('center', d3.forceCenter(400, 300))
+            .force('collision', d3.forceCollide().radius(50));
+
+        let nodes = [];
+        let links = [];
+
+        function updateTaskList(state) {
+            const taskList = document.getElementById('tasks');
+            taskList.innerHTML = '';
+
+            // Add workers
+            state.workers.forEach(worker => {
+                const div = document.createElement('div');
+                div.className = `task-item ${worker.status}`;
+                div.innerHTML = `
+                    <strong>Worker ${worker.id}</strong>
+                    <div>Task: ${worker.task}</div>
+                    ${worker.error ? `<div class="error">Error: ${worker.error}</div>` : ''}
+                `;
+                taskList.appendChild(div);
+            });
+
+            // Add tasks
+            state.tasks.forEach(task => {
+                const div = document.createElement('div');
+                div.className = `task-item ${task.status}`;
+                div.innerHTML = `
+                    <strong>Task: ${task.description}</strong>
+                    <div>Status: ${task.status}</div>
+                    ${task.error ? `<div class="error">Error: ${task.error}</div>` : ''}
+                `;
+                taskList.appendChild(div);
+            });
         }
+
+        function updateVisualization(state) {
+            // Update nodes with workers and tasks
+            nodes = [
+                ...state.workers.map(w => ({
+                    ...w,
+                    type: 'worker',
+                    radius: 30
+                })),
+                ...state.tasks.map(t => ({
+                    ...t,
+                    type: 'task',
+                    radius: 25
+                }))
+            ];
+
+            // Update links with dependencies and worker-task connections
+            links = [
+                ...state.dependencies,
+                ...state.tasks.map(t => ({
+                    from: t.worker_id,
+                    to: t.id
+                }))
+            ];
+
+            // Update visualization
+            const link = svg.selectAll('.link')
+                .data(links, d => `${d.from}-${d.to}`)
+                .join('line')
+                .attr('class', 'link');
+
+            const node = svg.selectAll('.node-group')
+                .data(nodes, d => d.id)
+                .join('g')
+                .attr('class', 'node-group')
+                .call(d3.drag()
+                    .on('start', dragstarted)
+                    .on('drag', dragged)
+                    .on('end', dragended));
+
+            node.selectAll('circle')
+                .data(d => [d])
+                .join('circle')
+                .attr('class', d => `node ${d.status}`)
+                .attr('r', d => d.radius);
+
+            node.selectAll('text.node-label')
+                .data(d => [d])
+                .join('text')
+                .attr('class', 'node-label')
+                .attr('dy', 4)
+                .attr('text-anchor', 'middle')
+                .text(d => d.type === 'worker' ? `Worker ${d.id}` : d.description.substring(0, 20));
+
+            // Add error messages
+            node.selectAll('text.error-message')
+                .data(d => d.error ? [d] : [])
+                .join('text')
+                .attr('class', 'error-message')
+                .attr('dy', 25)
+                .attr('text-anchor', 'middle')
+                .text(d => d.error);
+
+            simulation.nodes(nodes)
+                .on('tick', ticked);
+
+            simulation.force('link')
+                .links(links);
+
+            simulation.alpha(1).restart();
+
+            // Update task list
+            updateTaskList(state);
+        }
+
+        function ticked() {
+            svg.selectAll('.link')
+                .attr('x1', d => d.source.x)
+                .attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x)
+                .attr('y2', d => d.target.y);
+
+            svg.selectAll('.node-group')
+                .attr('transform', d => `translate(${d.x},${d.y})`);
+        }
+
+        function dragstarted(event) {
+            if (!event.active) simulation.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+
+        function dragended(event) {
+            if (!event.active) simulation.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+
+        // Socket event handlers
+        socket.on('connect', () => {
+            document.querySelector('.connection-status').textContent = 'Connected';
+            document.querySelector('.connection-status').classList.remove('disconnected');
+            document.querySelector('.connection-status').classList.add('connected');
+        });
+
+        socket.on('disconnect', () => {
+            document.querySelector('.connection-status').textContent = 'Disconnected';
+            document.querySelector('.connection-status').classList.remove('connected');
+            document.querySelector('.connection-status').classList.add('disconnected');
+        });
+
+        socket.on('state_update', updateVisualization);
     </script>
 </body>
 </html>

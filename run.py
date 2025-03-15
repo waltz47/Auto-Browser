@@ -4,6 +4,8 @@ import argparse
 import pandas as pd
 from threading import Thread
 import time
+import traceback
+import os
 
 sys.path.append("scripts")
 sys.path.append("scripts/web")
@@ -12,13 +14,24 @@ sys.path.append("scripts/dashboard")
 try:
     from nyx import Nyx
     print("Imported Nyx successfully")
-    from dashboard import DashboardNyx, app, socketio
+    from dashboard import DashboardNyx, init_dashboard, app, socketio
     print("Imported DashboardNyx, app, and socketio successfully")
 except ImportError as e:
     print(f"Import error: {e}")
+    traceback.print_exc()
     sys.exit(1)
 
+def start_dashboard(host='localhost', port=5000):
+    """Start the dashboard server."""
+    try:
+        print(f"Starting dashboard server at http://{host}:{port}")
+        socketio.run(app, host=host, port=port)
+    except Exception as e:
+        print(f"Error starting dashboard server: {e}")
+        traceback.print_exc()
+
 async def run_nyx(nyx_instance, initial_input):
+    """Run Nyx with the given input."""
     try:
         print(f"Handling initial input: {initial_input}")
         await nyx_instance.handle_initial_input(initial_input)
@@ -26,21 +39,19 @@ async def run_nyx(nyx_instance, initial_input):
         await nyx_instance.start()
     except Exception as e:
         print(f"Error in Nyx execution: {e}")
+        traceback.print_exc()
         raise
-
-def start_dashboard():
-    try:
-        print("Attempting to start Flask-SocketIO server on http://0.0.0.0:5000")
-        socketio.run(app, host='127.0.0.1', port=5000, use_reloader=False, debug=True)
-        print("Flask-SocketIO server running")  # This might not print due to blocking
-    except Exception as e:
-        print(f"Failed to start dashboard server: {e}")
-        sys.exit(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run Nyx or Nyx with Dashboard")
     parser.add_argument("--dashboard", action="store_true", help="Run with dashboard enabled")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     args = parser.parse_args()
+
+    # Set up debug mode if requested
+    if args.debug:
+        print("Debug mode enabled")
+        os.environ["DEBUG"] = "1"
 
     try:
         initial_input = input("Enter input: ")
@@ -49,28 +60,55 @@ if __name__ == '__main__':
             sys.exit(1)
 
         if args.dashboard:
-            print("Initializing DashboardNyx")
-            nyx = DashboardNyx()
+            print("=== Starting Nyx with Dashboard ===")
             
-            print("Starting dashboard thread")
+            # Create Nyx instance first
+            print("Initializing Nyx")
+            nyx = Nyx()
+            
+            # Initialize the dashboard with the Nyx instance
+            print("Initializing DashboardNyx")
+            dashboard = init_dashboard(nyx)
+            
+            # Start the dashboard components
+            print("Starting dashboard components")
+            dashboard.start()
+            
+            # Start the dashboard server in a separate thread
+            print("Starting dashboard server thread")
             dashboard_thread = Thread(target=start_dashboard)
             dashboard_thread.daemon = True
             dashboard_thread.start()
             
-            # Use time.sleep instead of asyncio.sleep since we're not in async context
-            print("Waiting 2 seconds for server to start")
-            time.sleep(2)  # Give the server time to start
+            # Give the server time to start
+            print("Waiting for server to start...")
+            time.sleep(2)
+            
             if not dashboard_thread.is_alive():
                 print("Dashboard thread failed to start or crashed")
                 sys.exit(1)
-            print("Dashboard thread is running. Open http://localhost:5000 in your browser")
+            print("Dashboard server is running. Open http://localhost:5000 in your browser")
             
-            asyncio.run(run_nyx(nyx, initial_input))
+            # Handle the input through the dashboard
+            print(f"Sending input to dashboard: {initial_input}")
+            dashboard.handle_input(initial_input)
+            
+            # Keep the main thread running
+            try:
+                print("Main thread waiting for dashboard to complete...")
+                while dashboard_thread.is_alive():
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\nShutting down...")
+                dashboard.running = False
+                time.sleep(2)  # Give time for cleanup
+                sys.exit(0)
         else:
-            print("Initializing regular Nyx")
+            print("=== Starting Regular Nyx ===")
             nyx = Nyx()
             asyncio.run(run_nyx(nyx, initial_input))
 
     except Exception as e:
         print(f"Unexpected error: {e}")
+        traceback.print_exc()
         sys.exit(1)
