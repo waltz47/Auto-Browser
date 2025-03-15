@@ -391,8 +391,19 @@ class Nyx:
                 self.input_queues[worker_id] = asyncio.Queue()
                 self.error_queues[worker_id] = asyncio.Queue()
                 worker.set_queues(self.input_queues[worker_id], self.error_queues[worker_id])
+                
+                # Set up task dependencies
                 if dependencies:
                     self.task_dependencies[worker_id] = dependencies
+                    print(f"Worker {worker_id} depends on workers: {dependencies}")
+                
+                # Initialize results entry
+                self.results[worker_id] = {
+                    'task': task_description,
+                    'status': 'initializing',
+                    'last_action': None
+                }
+                
                 print(f"Queues and dependencies set for worker {worker_id}")
             except Exception as e:
                 print(f"Error setting up worker queues: {e}")
@@ -414,8 +425,8 @@ class Nyx:
         except Exception as e:
             print(f"Error creating agent: {e}")
             traceback.print_exc()
-            if 'worker_id' in locals() and worker_id in self.available_worker_ids:
-                self.available_worker_ids.remove(worker_id)
+            if 'worker_id' in locals() and worker_id not in self.available_worker_ids:
+                self.available_worker_ids.add(worker_id)
             raise
 
     async def destroy_agent(self, worker_id: int):
@@ -468,6 +479,7 @@ class Nyx:
             # Check if dependencies are met before starting
             if worker.worker_id in self.task_dependencies:
                 deps = self.task_dependencies[worker.worker_id]
+                print(f"Worker {worker.worker_id} waiting for dependencies: {deps}")
                 while True:
                     deps_completed = all(
                         self.results.get(dep_id, {}).get('status') == 'completed'
@@ -476,8 +488,25 @@ class Nyx:
                     if deps_completed:
                         print(f"Worker {worker.worker_id} dependencies satisfied")
                         break
+                    
+                    # Check if any dependency has errored out
+                    deps_errored = any(
+                        self.results.get(dep_id, {}).get('status') == 'error'
+                        for dep_id in deps
+                    )
+                    if deps_errored:
+                        print(f"Worker {worker.worker_id} dependencies have errors, cannot proceed")
+                        raise Exception(f"Dependencies for worker {worker.worker_id} have errors")
+                        
                     print(f"Worker {worker.worker_id} waiting for dependencies")
                     await asyncio.sleep(1)
+            
+            # Update status to active
+            self.results[worker.worker_id] = {
+                'task': worker.current_task,
+                'status': 'active',
+                'last_action': 'Starting worker execution'
+            }
             
             # Main worker loop
             while True:
@@ -485,13 +514,19 @@ class Nyx:
                 active = await worker.step()
                 
                 # Store results
-                self.results[worker.worker_id] = {
-                    'task': worker.current_task,
-                    'status': 'active' if active else 'completed',
-                    'last_action': worker.messages.messages[-1].content if worker.messages.messages else None
-                }
-                
-                if not active:
+                if active:
+                    self.results[worker.worker_id] = {
+                        'task': worker.current_task,
+                        'status': 'active',
+                        'last_action': worker.messages.messages[-1].content if worker.messages.messages else None
+                    }
+                else:
+                    self.results[worker.worker_id] = {
+                        'task': worker.current_task,
+                        'status': 'completed',
+                        'last_action': worker.messages.messages[-1].content if worker.messages.messages else None,
+                        'completion_time': time.time()
+                    }
                     print(f"Worker {worker.worker_id} has completed its task")
                     break
                     
@@ -502,7 +537,8 @@ class Nyx:
             self.results[worker.worker_id] = {
                 'task': worker.current_task,
                 'status': 'cancelled',
-                'error': 'Task was cancelled'
+                'error': 'Task was cancelled',
+                'error_time': time.time()
             }
         except Exception as e:
             print(f"Worker {worker.worker_id} error: {e}")
@@ -510,7 +546,8 @@ class Nyx:
             self.results[worker.worker_id] = {
                 'task': worker.current_task,
                 'status': 'error',
-                'error': str(e)
+                'error_message': str(e),
+                'error_time': time.time()
             }
         
         print(f"Worker {worker.worker_id} execution completed")

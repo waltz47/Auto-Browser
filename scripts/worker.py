@@ -293,6 +293,13 @@ Instructions for completing tasks:
                 print(f"Worker {self.worker_id} received input: {user_input}")
                 # Add the user input to the message history
                 self.messages.add_user_text(user_input)
+                
+                # Take a screenshot after receiving input
+                try:
+                    await self.take_screenshot()
+                except Exception as e:
+                    print(f"Worker {self.worker_id} error taking screenshot after input: {e}")
+                
                 return True  # Return after getting input to process it in next step
                 
             # Add a retry counter to prevent infinite loops
@@ -410,6 +417,19 @@ Instructions for completing tasks:
                                 result = await tool_function(**args_dict)
                                 print(f"Worker {self.worker_id}: Tool {function_name} executed successfully")
                                 
+                                # Take a screenshot after executing a function that changes the page state
+                                if function_name in ['move_to_url', 'click_element', 'send_keys_to_element', 'call_submit', 'move_and_click_at_page_position']:
+                                    try:
+                                        print(f"Worker {self.worker_id} taking screenshot after {function_name}")
+                                        # Don't print the screenshot data itself
+                                        screenshot_result = await self.take_screenshot()
+                                        if screenshot_result:
+                                            print(f"Worker {self.worker_id} screenshot captured successfully (size: {len(screenshot_result)//1024}KB)")
+                                        else:
+                                            print(f"Worker {self.worker_id} failed to capture screenshot")
+                                    except Exception as e:
+                                        print(f"Worker {self.worker_id} error taking screenshot after {function_name}: {e}")
+                                
                                 # Add tool response to message history
                                 self.messages.add_tool_response(tool_call_id, result, function_name)
                                 
@@ -458,11 +478,21 @@ Instructions for completing tasks:
                         # Check if task is complete
                         if "TASK_COMPLETE" in content:
                             print(f"Worker {self.worker_id} completed task")
+                            # Take a final screenshot when task completes
+                            try:
+                                await self.take_screenshot()
+                            except Exception as e:
+                                print(f"Worker {self.worker_id} error taking final screenshot: {e}")
                             return False
                         
                         # Set waiting for input flag for next iteration if needed
                         if "WAITING_FOR_INPUT" in content:
                             self.waiting_for_input = True
+                            # Take a screenshot when waiting for input
+                            try:
+                                await self.take_screenshot()
+                            except Exception as e:
+                                print(f"Worker {self.worker_id} error taking screenshot when waiting for input: {e}")
                     
                     return True
                 else:
@@ -487,3 +517,19 @@ Instructions for completing tasks:
             await self.report_error('execution_error', f'Error during execution: {str(e)}')
             traceback.print_exc()  # Add traceback for better debugging
             return False
+
+    async def take_screenshot(self) -> str:
+        """Take a screenshot of the current browser page and return it as base64 encoded string."""
+        try:
+            screenshot_path = f"screenshots/worker_{self.worker_id}.png"
+            os.makedirs("screenshots", exist_ok=True)
+            await self.page.screenshot(path=screenshot_path)
+            
+            # Convert to base64 for transmission
+            with open(screenshot_path, "rb") as img_file:
+                screenshot_data = base64.b64encode(img_file.read()).decode('utf-8')
+                # Don't print the base64 data, just return it
+                return screenshot_data
+        except Exception as e:
+            print(f"Worker {self.worker_id} Error taking screenshot: {str(e)}")
+            return ""

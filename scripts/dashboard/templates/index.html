@@ -3,7 +3,6 @@
 <head>
     <title>Nyx Dashboard</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -13,54 +12,65 @@
         }
         .dashboard-container {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
-        #visualization, #task-list {
+        .task-list {
             background: white;
             border-radius: 8px;
             padding: 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
-        .node {
-            fill: #fff;
-            stroke: #333;
-            stroke-width: 2px;
+        .agent-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
         }
-        .node.error {
-            fill: #ffebee;
-            stroke: #f44336;
+        .agent-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
         }
-        .node.active {
-            fill: #e3f2fd;
-            stroke: #2196f3;
+        .agent-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin: 0;
         }
-        .node.completed {
-            fill: #e8f5e9;
-            stroke: #4caf50;
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 5px;
         }
-        .node.waiting {
-            fill: #fff3e0;
-            stroke: #ff9800;
+        .status-indicator.error { background: #f44336; }
+        .status-indicator.active { background: #2196f3; }
+        .status-indicator.completed { background: #4caf50; }
+        .status-indicator.waiting { background: #ff9800; }
+        .status-indicator.idle { background: #9e9e9e; }
+        
+        .agent-task {
+            margin-bottom: 10px;
+            flex-grow: 1;
         }
-        .node.idle {
-            fill: #f5f5f5;
-            stroke: #9e9e9e;
+        .screenshot-container {
+            margin-top: 10px;
+            text-align: center;
         }
-        .link {
-            stroke: #999;
-            stroke-opacity: 0.6;
-            stroke-width: 2px;
-            marker-end: url(#arrowhead);
-        }
-        .error-message {
-            fill: #f44336;
-            font-size: 12px;
-        }
-        .node-label {
-            font-size: 12px;
-            pointer-events: none;
+        .screenshot-img {
+            max-width: 100%;
+            max-height: 200px;
+            object-fit: contain;
+            border: 1px solid #eee;
         }
         .task-item {
             padding: 10px;
@@ -80,73 +90,107 @@
             padding: 8px 16px;
             border-radius: 4px;
             color: white;
+            z-index: 1000;
         }
         .connection-status.connected { background: #4caf50; }
         .connection-status.disconnected { background: #f44336; }
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .last-update {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
     <div class="connection-status disconnected">Disconnected</div>
-    <div class="dashboard-container">
-        <div id="visualization"></div>
-        <div id="task-list">
-            <h2>Tasks and Workers</h2>
-            <div id="tasks"></div>
+    
+    <div class="dashboard-header">
+        <h1>Nyx Agent Dashboard</h1>
+        <div>
+            <div id="last-update" class="last-update">Last update: Never</div>
         </div>
     </div>
+    
+    <div class="task-list">
+        <h2>Active Tasks</h2>
+        <div id="tasks"></div>
+    </div>
+    
+    <h2>Agent Grid</h2>
+    <div class="dashboard-container" id="agent-grid">
+        <p>No agents active</p>
+    </div>
+    
     <script>
-        const socket = io();
-        let svg = d3.select('#visualization')
-            .append('svg')
-            .attr('width', '100%')
-            .attr('height', 600);
-
-        // Add arrow marker definition
-        svg.append('defs').append('marker')
-            .attr('id', 'arrowhead')
-            .attr('viewBox', '-0 -5 10 10')
-            .attr('refX', 20)
-            .attr('refY', 0)
-            .attr('orient', 'auto')
-            .attr('markerWidth', 6)
-            .attr('markerHeight', 6)
-            .attr('xoverflow', 'visible')
-            .append('svg:path')
-            .attr('d', 'M 0,-5 L 10 ,0 L 0,5')
-            .attr('fill', '#999')
-            .style('stroke', 'none');
-
-        const simulation = d3.forceSimulation()
-            .force('link', d3.forceLink().id(d => d.id).distance(100))
-            .force('charge', d3.forceManyBody().strength(-300))
-            .force('center', d3.forceCenter(400, 300))
-            .force('collision', d3.forceCollide().radius(50));
-
-        let nodes = [];
-        let links = [];
-
+        const socket = io({
+            reconnection: true,
+            reconnectionAttempts: Infinity,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000,
+            autoConnect: true
+        });
+        
+        // Debug logging for socket events
+        socket.on('connect_error', (err) => {
+            console.error('Connection error:', err);
+            document.querySelector('.connection-status').textContent = 'Connection Error: ' + err.message;
+            document.querySelector('.connection-status').classList.remove('connected');
+            document.querySelector('.connection-status').classList.add('disconnected');
+        });
+        
+        socket.on('connect_timeout', () => {
+            console.error('Connection timeout');
+            document.querySelector('.connection-status').textContent = 'Connection Timeout';
+            document.querySelector('.connection-status').classList.remove('connected');
+            document.querySelector('.connection-status').classList.add('disconnected');
+        });
+        
+        // Add a manual refresh button
+        const connectionStatus = document.querySelector('.connection-status');
+        connectionStatus.innerHTML += ' <button id="refresh-btn" style="margin-left: 10px;">Refresh Data</button>';
+        document.getElementById('refresh-btn').addEventListener('click', () => {
+            socket.emit('request_update');
+            console.log('Manual refresh requested');
+        });
+        
+        // Add auto-refresh every 5 seconds as a fallback
+        setInterval(() => {
+            if (socket.connected) {
+                socket.emit('request_update');
+                console.log('Auto refresh requested');
+            } else {
+                console.log('Not connected, cannot request update');
+                // Try to reconnect
+                socket.connect();
+            }
+        }, 5000);
+        
         function updateTaskList(state) {
             const taskList = document.getElementById('tasks');
             taskList.innerHTML = '';
 
-            // Add workers
-            state.workers.forEach(worker => {
-                const div = document.createElement('div');
-                div.className = `task-item ${worker.status}`;
-                div.innerHTML = `
-                    <strong>Worker ${worker.id}</strong>
-                    <div>Task: ${worker.task}</div>
-                    ${worker.error ? `<div class="error">Error: ${worker.error}</div>` : ''}
-                `;
-                taskList.appendChild(div);
-            });
+            // Filter for active tasks
+            const activeTasks = state.tasks.filter(task => task.status === 'active');
+            
+            if (activeTasks.length === 0) {
+                taskList.innerHTML = '<p>No active tasks</p>';
+                return;
+            }
 
             // Add tasks
-            state.tasks.forEach(task => {
+            activeTasks.forEach(task => {
                 const div = document.createElement('div');
                 div.className = `task-item ${task.status}`;
                 div.innerHTML = `
-                    <strong>Task: ${task.description}</strong>
+                    <strong>Task ${task.id}</strong>
+                    <div>Description: ${task.description}</div>
                     <div>Status: ${task.status}</div>
                     ${task.error ? `<div class="error">Error: ${task.error}</div>` : ''}
                 `;
@@ -154,106 +198,79 @@
             });
         }
 
-        function updateVisualization(state) {
-            // Update nodes with workers and tasks
-            nodes = [
-                ...state.workers.map(w => ({
-                    ...w,
-                    type: 'worker',
-                    radius: 30
-                })),
-                ...state.tasks.map(t => ({
-                    ...t,
-                    type: 'task',
-                    radius: 25
-                }))
-            ];
+        function updateAgentGrid(state) {
+            const grid = document.getElementById('agent-grid');
+            grid.innerHTML = '';
+            
+            // Check if we have workers
+            if (!state.workers || state.workers.length === 0) {
+                grid.innerHTML = '<p>No agents active</p>';
+                return;
+            }
+            
+            // Create a card for each worker
+            state.workers.forEach(worker => {
+                const card = document.createElement('div');
+                card.className = 'agent-card';
+                
+                // Create header with worker ID and status
+                const header = document.createElement('div');
+                header.className = 'agent-header';
+                header.innerHTML = `
+                    <h3 class="agent-title">Worker ${worker.id}</h3>
+                    <span>
+                        <span class="status-indicator ${worker.status}"></span>
+                        ${worker.status}
+                    </span>
+                `;
+                card.appendChild(header);
+                
+                // Add task information
+                const taskInfo = document.createElement('div');
+                taskInfo.className = 'agent-task';
+                taskInfo.innerHTML = `
+                    <strong>Current Task:</strong>
+                    <div>${worker.task || 'No task assigned'}</div>
+                    ${worker.error ? `<div class="error">Error: ${worker.error}</div>` : ''}
+                `;
+                card.appendChild(taskInfo);
+                
+                // Add screenshot if available
+                const screenshotDiv = document.createElement('div');
+                screenshotDiv.className = 'screenshot-container';
+                
+                // Convert worker.id to a string to ensure it matches keys in state.screenshots
+                const workerId = String(worker.id);
+                
+                if (state.screenshots && state.screenshots[workerId]) {
+                    screenshotDiv.innerHTML = `
+                        <img src="data:image/png;base64,${state.screenshots[workerId]}" 
+                             class="screenshot-img" alt="Worker ${worker.id} screenshot" />
+                    `;
+                } else {
+                    screenshotDiv.innerHTML = '<p>No screenshot available</p>';
+                }
+                
+                card.appendChild(screenshotDiv);
+                grid.appendChild(card);
+            });
+        }
 
-            // Update links with dependencies and worker-task connections
-            links = [
-                ...state.dependencies,
-                ...state.tasks.map(t => ({
-                    from: t.worker_id,
-                    to: t.id
-                }))
-            ];
-
-            // Update visualization
-            const link = svg.selectAll('.link')
-                .data(links, d => `${d.from}-${d.to}`)
-                .join('line')
-                .attr('class', 'link');
-
-            const node = svg.selectAll('.node-group')
-                .data(nodes, d => d.id)
-                .join('g')
-                .attr('class', 'node-group')
-                .call(d3.drag()
-                    .on('start', dragstarted)
-                    .on('drag', dragged)
-                    .on('end', dragended));
-
-            node.selectAll('circle')
-                .data(d => [d])
-                .join('circle')
-                .attr('class', d => `node ${d.status}`)
-                .attr('r', d => d.radius);
-
-            node.selectAll('text.node-label')
-                .data(d => [d])
-                .join('text')
-                .attr('class', 'node-label')
-                .attr('dy', 4)
-                .attr('text-anchor', 'middle')
-                .text(d => d.type === 'worker' ? `Worker ${d.id}` : d.description.substring(0, 20));
-
-            // Add error messages
-            node.selectAll('text.error-message')
-                .data(d => d.error ? [d] : [])
-                .join('text')
-                .attr('class', 'error-message')
-                .attr('dy', 25)
-                .attr('text-anchor', 'middle')
-                .text(d => d.error);
-
-            simulation.nodes(nodes)
-                .on('tick', ticked);
-
-            simulation.force('link')
-                .links(links);
-
-            simulation.alpha(1).restart();
-
+        function updateDashboard(state) {
+            // Update the last update timestamp
+            const now = new Date();
+            document.getElementById('last-update').textContent = `Last update: ${now.toLocaleTimeString()}`;
+            
+            // Update connection status
+            document.querySelector('.connection-status').textContent = 'Connected';
+            document.querySelector('.connection-status').classList.remove('disconnected');
+            document.querySelector('.connection-status').classList.add('connected');
+            
             // Update task list
             updateTaskList(state);
-        }
-
-        function ticked() {
-            svg.selectAll('.link')
-                .attr('x1', d => d.source.x)
-                .attr('y1', d => d.source.y)
-                .attr('x2', d => d.target.x)
-                .attr('y2', d => d.target.y);
-
-            svg.selectAll('.node-group')
-                .attr('transform', d => `translate(${d.x},${d.y})`);
-        }
-
-        function dragstarted(event) {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            event.subject.fx = event.subject.x;
-            event.subject.fy = event.subject.y;
-        }
-
-        function dragged(event) {
-            event.subject.fx = event.x;
-            event.subject.fy = event.y;
-        }
-
-        function dragended(event) {
-            if (!event.active) simulation.alphaTarget(0);
-            event.subject.fx = null;
-            event.subject.fy = null;
+            
+            // Update agent grid
+            updateAgentGrid(state);
         }
 
         // Socket event handlers
@@ -269,7 +286,7 @@
             document.querySelector('.connection-status').classList.add('disconnected');
         });
 
-        socket.on('state_update', updateVisualization);
+        socket.on('state_update', updateDashboard);
     </script>
 </body>
 </html>

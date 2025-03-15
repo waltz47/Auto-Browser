@@ -9,13 +9,45 @@ from threading import Thread, Lock
 from queue import Queue
 import traceback
 from functools import partial
+import json
 
 # Import your Nyx class
 from nyx import Nyx
 
 # Create global instances
 app = Flask(__name__, template_folder=os.path.join(os.path.dirname(__file__), 'templates'))
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins="*", 
+    async_mode='threading',
+    ping_timeout=60,
+    ping_interval=25,
+    # Disable verbose logging that might print large objects
+    logger=False,
+    engineio_logger=False
+)
+
+# Add debug print wrapper to prevent printing large objects
+def safe_print(message, obj=None):
+    """Print message without printing large objects like base64 encoded images."""
+    if obj is None:
+        print(message)
+        return
+        
+    if isinstance(obj, dict):
+        # Create a copy with screenshots summarized
+        safe_obj = {}
+        for key, value in obj.items():
+            if key == 'screenshots' and isinstance(value, dict):
+                screenshot_sizes = {k: f"<base64 image: {len(v)//1024}KB>" for k, v in value.items()}
+                safe_obj[key] = f"<{len(value)} screenshots: {screenshot_sizes}>"
+            else:
+                safe_obj[key] = value
+        print(f"{message}: {safe_obj}")
+    elif isinstance(obj, (str, bytes)) and len(obj) > 1000:
+        print(f"{message}: <large object: {len(obj)} bytes>")
+    else:
+        print(f"{message}: {obj}")
 
 class DashboardNyx:
     _instance = None
@@ -61,6 +93,9 @@ class DashboardNyx:
             self.nyx = Nyx()
         DashboardNyx._nyx = self.nyx
         
+        # Create screenshots directory if it doesn't exist
+        self._ensure_screenshots_dir()
+        
         self.emit_lock = Lock()
         self.request_queue = Queue()
         self.running = True
@@ -73,11 +108,51 @@ class DashboardNyx:
         def index():
             return render_template('index.html')
         
+        @app.route('/status')
+        def status():
+            """Status endpoint to verify server is running."""
+            status_data = {
+                'status': 'ok',
+                'time': time.time(),
+                'workers': len(self.nyx.workers) if hasattr(self.nyx, 'workers') else 0,
+                'tasks': len(self.nyx.results) if hasattr(self.nyx, 'results') else 0,
+            }
+            return json.dumps(status_data)
+        
         @socketio.on('connect')
         def handle_connect():
-            print('Client connected')
+            safe_print('Client connected')
             with self.emit_lock:
                 self.emit_state()
+                
+        @socketio.on('request_update')
+        def handle_request_update():
+            safe_print('Update requested by client')
+            with self.emit_lock:
+                self.emit_state()
+                
+        @socketio.on('error')
+        def handle_error(error):
+            safe_print('SocketIO error', error)
+                
+        # Handle socket events that might try to print state
+        @socketio.on_error()
+        def handle_socket_error(e):
+            safe_print(f'SocketIO error: {str(e)}')
+            
+        @socketio.on_error_default
+        def default_error_handler(e):
+            safe_print(f'SocketIO default error: {str(e)}')
+    
+    def _ensure_screenshots_dir(self):
+        """Ensure the screenshots directory exists."""
+        try:
+            screenshots_dir ='screenshots'
+            os.makedirs(screenshots_dir, exist_ok=True)
+            print(f"Screenshots directory ensured: {screenshots_dir}")
+        except Exception as e:
+            print(f"Error ensuring screenshots directory: {e}")
+            traceback.print_exc()
     
     async def initialize_nyx(self):
         """Initialize Nyx components including browser and other required setup."""
@@ -163,13 +238,21 @@ class DashboardNyx:
     
     def _run_state_emission(self):
         """Run the state emission loop in its own thread."""
+        last_emission_time = 0
         while self.running:
             try:
-                with self.emit_lock:
-                    self.emit_state()
-                time.sleep(1)
+                current_time = time.time()
+                # Emit state every 5 seconds
+                if current_time - last_emission_time >= 5.0:
+                    safe_print(f"State emission scheduled at {time.strftime('%H:%M:%S')}")
+                    with self.emit_lock:
+                        self.emit_state()
+                    last_emission_time = current_time
+                
+                # Sleep for a short time to avoid high CPU usage
+                time.sleep(0.1)
             except Exception as e:
-                print(f"Error in state emission: {e}")
+                safe_print(f"Error in state emission", str(e))
                 traceback.print_exc()
     
     async def handle_initial_input(self, input_text):
@@ -226,22 +309,65 @@ class DashboardNyx:
             state = {
                 'workers': [],
                 'tasks': [],
-                'dependencies': []
+                'dependencies': [],
+                'screenshots': {}  # Add screenshots to state
             }
             
+            # Check if vision is enabled (for informational purposes only)
+            vision_enabled = False
+            if hasattr(self.nyx, 'config') and 'enable_vision' in self.nyx.config:
+                vision_enabled = self.nyx.config['enable_vision'] == '1' or self.nyx.config['enable_vision'] == True
+                
             # Safely collect worker states
             if hasattr(self.nyx, 'workers'):
                 for worker_id, worker in enumerate(self.nyx.workers):
                     if worker:
+                        # Get worker status
                         worker_state = {
                             'id': worker_id,
                             'task': worker.current_task if hasattr(worker, 'current_task') else 'Unknown',
                             'status': 'error' if (hasattr(worker, 'error_state') and worker.error_state) 
                                      else ('active' if (hasattr(worker, 'is_running') and worker.is_running) 
                                           else 'idle'),
-                            'error': worker.error_state if hasattr(worker, 'error_state') else None
+                            'error': worker.error_state if hasattr(worker, 'error_state') else None,
+                            'vision_enabled': vision_enabled  # Pass this information to the frontend
                         }
                         state['workers'].append(worker_state)
+                        
+                        # Always try to include screenshots for the dashboard
+                        # This prevents freezing the dashboard during page loads
+                        screenshot_path = f"screenshots/worker_{worker_id}.png"
+                        try:
+                            if os.path.exists(screenshot_path) and os.path.getsize(screenshot_path) > 0:
+                                # Only read from disk if the file exists and is not empty
+                                with open(screenshot_path, "rb") as img_file:
+                                    screenshot_data = base64.b64encode(img_file.read()).decode('utf-8')
+                                    # Store screenshot in state without printing it
+                                    state['screenshots'][str(worker_id)] = screenshot_data
+                                    safe_print(f"Screenshot loaded for worker {worker_id}", f"Size: {len(screenshot_data)//1024}KB")
+                                    
+                            # Only attempt to take a fresh screenshot for active workers every few updates
+                            # if we couldn't find one on disk
+                            elif hasattr(worker, 'take_screenshot') and worker.is_running:
+                                # Use a brief timeout to avoid blocking the dashboard during page loading
+                                loop = asyncio.new_event_loop()
+                                try:
+                                    # Add a timeout to prevent hanging
+                                    asyncio.set_event_loop(loop)
+                                    future = asyncio.ensure_future(worker.take_screenshot(), loop=loop)
+                                    screenshot = loop.run_until_complete(asyncio.wait_for(future, timeout=1.0))
+                                    if screenshot:
+                                        # Store in state without printing the screenshot data
+                                        state['screenshots'][str(worker_id)] = screenshot
+                                        safe_print(f"Screenshot captured for worker {worker_id}", f"Size: {len(screenshot)//1024}KB")
+                                except asyncio.TimeoutError:
+                                    safe_print(f"Screenshot capture timed out for worker {worker_id}")
+                                except Exception as e:
+                                    safe_print(f"Error taking screenshot for worker {worker_id}", str(e))
+                                finally:
+                                    loop.close()
+                        except Exception as e:
+                            safe_print(f"Error processing screenshot for worker {worker_id}", str(e))
             
             # Safely collect task information
             if hasattr(self.nyx, 'results'):
@@ -266,9 +392,16 @@ class DashboardNyx:
                                 'to': f'task_{task_id}'
                             })
             
+            # Log state update but exclude the large screenshot data
+            screenshot_count = len(state['screenshots']) if 'screenshots' in state else 0
+            worker_count = len(state['workers']) if 'workers' in state else 0
+            task_count = len(state['tasks']) if 'tasks' in state else 0
+            safe_print(f"Emitting state update", f"{worker_count} workers, {task_count} tasks, {screenshot_count} screenshots")
+            
+            # Send state to clients but don't print the state object
             socketio.emit('state_update', state)
         except Exception as e:
-            print(f"Error collecting or emitting state: {e}")
+            safe_print(f"Error collecting or emitting state", str(e))
             traceback.print_exc()
     
     def handle_input(self, input_text):

@@ -21,11 +21,12 @@ except ImportError as e:
     traceback.print_exc()
     sys.exit(1)
 
-def start_dashboard(host='localhost', port=5000):
+def start_dashboard(host='0.0.0.0', port=5000):
     """Start the dashboard server."""
     try:
         print(f"Starting dashboard server at http://{host}:{port}")
-        socketio.run(app, host=host, port=port)
+        print(f"Open http://localhost:{port} in your browser to view the dashboard")
+        socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True, debug=False)
     except Exception as e:
         print(f"Error starting dashboard server: {e}")
         traceback.print_exc()
