@@ -1,55 +1,325 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Nyx AI Dashboard</title>
+    <title>Auto Browser Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github-dark.min.css">
     <style>
+        :root {
+            --primary-color: #2563eb;
+            --bg-color: #f8fafc;
+            --text-color: #1e293b;
+            --border-color: #e2e8f0;
+            --hover-color: #1d4ed8;
+        }
+
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             margin: 0;
             padding: 20px;
+            background: var(--bg-color);
+            color: var(--text-color);
             display: flex;
             gap: 20px;
+            height: 100vh;
+            box-sizing: border-box;
         }
+
         #chat-container {
             flex: 1;
             min-width: 400px;
-            height: 90vh;
+            height: calc(100vh - 40px);
             display: flex;
             flex-direction: column;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            transition: all 0.3s ease;
         }
+
         #messages {
             flex-grow: 1;
-            border: 1px solid #ccc;
             padding: 10px;
-            margin-bottom: 10px;
+            margin-bottom: 20px;
             overflow-y: auto;
-            white-space: pre-wrap;
+            border-radius: 8px;
+            background: var(--bg-color);
         }
+
+        .message {
+            margin-bottom: 16px;
+            opacity: 0;
+            transform: translateY(20px);
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        @keyframes fadeIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            padding: 12px 16px;
+            background: var(--primary-color);
+            color: white;
+            border-radius: 12px 12px 2px 12px;
+            align-self: flex-end;
+            max-width: 80%;
+        }
+
+        .message.assistant {
+            padding: 12px 16px;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 12px 12px 12px 2px;
+            max-width: 80%;
+        }
+
         #input-container {
             display: flex;
             gap: 10px;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         }
+
         #user-input {
             flex-grow: 1;
-            padding: 5px;
+            padding: 12px 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.2s ease;
+            resize: none;
+            min-height: 24px;
+            max-height: 150px;
         }
+
+        #user-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+        }
+
+        button {
+            padding: 12px 24px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        button:hover {
+            background: var(--hover-color);
+        }
+
         #browser-view {
             flex: 1;
             min-width: 400px;
-            height: 90vh;
-            border: 1px solid #ccc;
-            display: flex;
-            flex-direction: column;
-        }
-        #video-container {
-            flex-grow: 1;
-            background: #f0f0f0;
+            height: calc(100vh - 40px);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            background: white;
+            display: none;
             position: relative;
         }
+
+        #video-container {
+            width: 100%;
+            height: 100%;
+            background: #f0f0f0;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
         #browser-video {
             width: 100%;
             height: 100%;
             object-fit: contain;
+            background: black;
+        }
+
+        /* Add quality selector */
+        #quality-selector {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px;
+            border-radius: 8px;
+            color: white;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            font-size: 14px;
+        }
+
+        #quality-selector select {
+            background: transparent;
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            padding: 4px 8px;
+            outline: none;
+        }
+
+        #quality-selector select option {
+            background: #1e1e1e;
+            color: white;
+        }
+
+        /* Add video controls */
+        .video-controls {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 8px;
+            border-radius: 8px;
+            color: white;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .video-controls button {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .video-controls button:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Fix blank frame background */
+        @keyframes typing {
+            50% { opacity: 1; }
+        }
+
+        /* Add video loading indicator */
+        .video-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 16px 24px;
+            border-radius: 12px;
+            color: white;
+            display: none;
+        }
+
+        /* Add video error state */
+        .video-error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 16px 24px;
+            border-radius: 12px;
+            color: white;
+            display: none;
+            text-align: center;
+        }
+
+        .video-error button {
+            margin-top: 12px;
+            background: var(--primary-color);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        /* Add video quality classes */
+        .quality-high {
+            image-rendering: high-quality;
+        }
+
+        .quality-medium {
+            image-rendering: auto;
+        }
+
+        .quality-low {
+            image-rendering: optimizeSpeed;
+        }
+
+        /* Resizable browser view */
+        .resizer {
+            width: 4px;
+            height: 100%;
+            background: var(--border-color);
+            cursor: col-resize;
+            transition: background 0.2s ease;
+        }
+
+        .resizer:hover {
+            background: var(--primary-color);
+        }
+
+        /* Markdown styles */
+        .markdown-body {
+            line-height: 1.6;
+        }
+
+        .markdown-body pre {
+            background: #1e1e1e;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+
+        .markdown-body code {
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+        }
+
+        .markdown-body p {
+            margin: 8px 0;
+        }
+
+        /* Loading indicator */
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+            background: var(--bg-color);
+            border-radius: 12px;
+            width: fit-content;
+        }
+
+        .typing-indicator span {
+            width: 8px;
+            height: 8px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            animation: typing 1s infinite;
+            opacity: 0.3;
+        }
+
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            50% { opacity: 1; }
         }
     </style>
 </head>
@@ -57,88 +327,400 @@
     <div id="chat-container">
         <div id="messages"></div>
         <div id="input-container">
-            <input type="text" id="user-input" placeholder="Enter your task...">
+            <textarea id="user-input" placeholder="Enter your task... (Shift+Enter for new line)" rows="1"></textarea>
             <button onclick="sendMessage()">Send</button>
         </div>
     </div>
+    <div class="resizer" id="resizer"></div>
     <div id="browser-view">
         <div id="video-container">
-            <video id="browser-video" autoplay playsinline></video>
+            <video id="browser-video" autoplay playsinline class="quality-high"></video>
+            <div class="video-loading">Loading stream...</div>
+            <div class="video-error">
+                Stream connection failed
+                <button onclick="retryStream()">Retry</button>
+            </div>
+            <div class="video-controls">
+                <button onclick="toggleFullscreen()">Fullscreen</button>
+                <button onclick="reloadStream()">Reload</button>
+            </div>
+            <div id="quality-selector">
+                Quality:
+                <select onchange="changeQuality(this.value)">
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+            </div>
         </div>
     </div>
 
     <script>
         let ws = null;
         let pc = null;
+        let isStreaming = false;
+        const video = document.getElementById('browser-video');
+        const loadingIndicator = document.querySelector('.video-loading');
+        const errorIndicator = document.querySelector('.video-error');
 
-        // WebSocket setup
-        function connectWebSocket() {
-            ws = new WebSocket(`ws://${window.location.host}/ws`);
-            ws.onmessage = function(event) {
-                const messages = document.getElementById('messages');
-                messages.innerHTML += event.data + '\n';
-                messages.scrollTop = messages.scrollHeight;
-            };
-            ws.onclose = function() {
-                setTimeout(connectWebSocket, 1000);
-            };
-        }
-
-        // WebRTC setup
-        async function setupWebRTC() {
-            const video = document.getElementById('browser-video');
-            
-            pc = new RTCPeerConnection({
-                sdpSemantics: 'unified-plan',
-                iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
-            });
-
-            // Handle incoming video track
-            pc.ontrack = function(event) {
-                if (event.track.kind === 'video') {
-                    video.srcObject = event.streams[0];
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (hljs && lang && hljs.getLanguage(lang)) {
+                    try {
+                        return hljs.highlight(code, { language: lang }).value;
+                    } catch (e) {
+                        console.log("Failed to highlight:", e);
+                        return code;
+                    }
                 }
-            };
+                return code;
+            },
+            breaks: true
+        });
 
-            // Create and send offer
-            const offer = await pc.createOffer({
-                offerToReceiveVideo: true
+        // Auto-resize textarea
+        const textarea = document.getElementById('user-input');
+        textarea.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        // Handle resizer
+        const resizer = document.getElementById('resizer');
+        const browserView = document.getElementById('browser-view');
+        let isResizing = false;
+
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.addEventListener('mousemove', handleMouseMove);
+            document.addEventListener('mouseup', () => {
+                isResizing = false;
+                document.removeEventListener('mousemove', handleMouseMove);
             });
-            await pc.setLocalDescription(offer);
+        });
 
-            const response = await fetch('/offer', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    sdp: pc.localDescription.sdp,
-                    type: pc.localDescription.type
-                })
-            });
-
-            const answer = await response.json();
-            await pc.setRemoteDescription(answer);
+        function handleMouseMove(e) {
+            if (!isResizing) return;
+            const containerWidth = document.body.clientWidth;
+            const newWidth = e.clientX;
+            const percentage = (newWidth / containerWidth) * 100;
+            document.getElementById('chat-container').style.flex = `0 0 ${percentage}%`;
+            browserView.style.flex = `1`;
         }
 
-        function sendMessage() {
-            const input = document.getElementById('user-input');
-            const message = input.value.trim();
-            if (message && ws) {
-                ws.send(message);
-                input.value = '';
+        // WebSocket setup with reconnection handling
+        let wsReconnectAttempts = 0;
+        const MAX_RECONNECT_ATTEMPTS = 5;
+
+        function connectWebSocket() {
+            if (wsReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                console.log("Max reconnection attempts reached. Please refresh the page.");
+                return;
+            }
+
+            try {
+                ws = new WebSocket(`ws://${window.location.host}/ws`);
+                
+                ws.onopen = function() {
+                    console.log("WebSocket connected");
+                    wsReconnectAttempts = 0; // Reset attempts on successful connection
+                    
+                    // Reinitialize video stream when WebSocket reconnects
+                    if (!isStreaming || !pc || pc.connectionState !== 'connected') {
+                        console.log("Reinitializing video stream after WebSocket reconnection");
+                        rtcReconnectAttempts = 0;
+                        setupWebRTC();
+                    }
+                };
+
+                ws.onmessage = function(event) {
+                    const text = event.data.trim();
+                    
+                    // Check for refresh command
+                    if (text === "__REFRESH_PAGE__") {
+                        console.log("Received refresh command. Reloading page...");
+                        setTimeout(() => window.location.reload(), 1000);
+                        return;
+                    }
+
+                    // Skip debug messages and empty messages
+                    if (!text || !text.trim() || text.includes('===')) {
+                        console.log("Skipping debug message or empty message");
+                        return;
+                    }
+
+                    const messages = document.getElementById('messages');
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = 'message';
+
+                    try {
+                        if (text.includes('\nUser:')) {
+                            console.log("Processing user message");
+                            messageDiv.className += ' user';
+                            messageDiv.textContent = text.replace('\nUser:', '').trim();
+                            messages.appendChild(messageDiv);
+                        } else if (text.includes('\nAuto Browser:')) {
+                            console.log("Processing Auto Browser message");
+                            messageDiv.className += ' assistant markdown-body';
+                            const content = text.replace('\nAuto Browser:', '').trim();
+                            messageDiv.innerHTML = marked.parse(content);
+                            if (hljs) {
+                                hljs.highlightAll();
+                            }
+                            messages.appendChild(messageDiv);
+                        } else if (!text.includes('__REFRESH_PAGE__')) { // Only process non-refresh messages
+                            console.log("Processing regular message");
+                            messageDiv.className += ' assistant markdown-body';
+                            messageDiv.innerHTML = marked.parse(text.trim());
+                            if (hljs) {
+                                hljs.highlightAll();
+                            }
+                            messages.appendChild(messageDiv);
+                        }
+
+                        messages.scrollTop = messages.scrollHeight;
+                        console.log("Message processed and added to display");
+                    } catch (error) {
+                        console.error("Error processing message:", error);
+                    }
+                };
+
+                ws.onclose = function() {
+                    console.log("WebSocket closed, attempting to reconnect...");
+                    // Clean up existing video stream
+                    if (pc) {
+                        pc.close();
+                        pc = null;
+                    }
+                    isStreaming = false;
+                    video.srcObject = null;
+                    ws = null;
+                    wsReconnectAttempts++;
+                    
+                    // On server restart, force a complete reinitialization
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                };
+
+                ws.onerror = function(error) {
+                    console.error("WebSocket error:", error);
+                    // Clean up video stream on error
+                    if (pc) {
+                        pc.close();
+                        pc = null;
+                    }
+                    isStreaming = false;
+                    video.srcObject = null;
+                    
+                    // On server error, force a complete reinitialization
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                };
+
+                // Handle page visibility changes
+                document.addEventListener('visibilitychange', function() {
+                    if (document.visibilityState === 'visible') {
+                        // When page becomes visible, check if we need to reinitialize
+                        if (!ws || ws.readyState !== WebSocket.OPEN || !isStreaming) {
+                            console.log("Page visible and stream not active, reloading page...");
+                            window.location.reload();
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Error creating WebSocket:", error);
+                wsReconnectAttempts++;
+                setTimeout(connectWebSocket, Math.min(1000 * wsReconnectAttempts, 5000));
             }
         }
 
-        document.getElementById('user-input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
+        // Video quality control
+        function changeQuality(quality) {
+            video.className = `quality-${quality}`;
+        }
+
+        // Fullscreen control
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                browserView.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Stream controls
+        function reloadStream() {
+            if (pc) {
+                pc.close();
+            }
+            setupWebRTC();
+        }
+
+        function retryStream() {
+            errorIndicator.style.display = 'none';
+            loadingIndicator.style.display = 'block';
+            reloadStream();
+        }
+
+        // Show loading state
+        function showLoading() {
+            loadingIndicator.style.display = 'block';
+            errorIndicator.style.display = 'none';
+        }
+
+        // Show error state
+        function showError() {
+            loadingIndicator.style.display = 'none';
+            errorIndicator.style.display = 'block';
+        }
+
+        // WebRTC setup with error handling
+        let rtcReconnectAttempts = 0;
+        const MAX_RTC_RECONNECT_ATTEMPTS = 3;
+
+        async function setupWebRTC() {
+            if (rtcReconnectAttempts >= MAX_RTC_RECONNECT_ATTEMPTS) {
+                console.log("Max WebRTC reconnection attempts reached");
+                browserView.style.display = 'none';
+                resizer.style.display = 'none';
+                document.getElementById('chat-container').style.flex = '1';
+                return;
+            }
+
+            showLoading();
+            try {
+                if (pc) {
+                    await pc.close();
+                    pc = null;
+                }
+
+                pc = new RTCPeerConnection({
+                    sdpSemantics: 'unified-plan',
+                    iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+                });
+
+                pc.ontrack = function(event) {
+                    if (event.track.kind === 'video') {
+                        isStreaming = true;
+                        browserView.style.display = 'block';
+                        resizer.style.display = 'block';
+                        video.srcObject = event.streams[0];
+                        loadingIndicator.style.display = 'none';
+                        rtcReconnectAttempts = 0; // Reset attempts on successful connection
+                    }
+                };
+
+                pc.onconnectionstatechange = function() {
+                    console.log("WebRTC state:", pc.connectionState);
+                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                        showError();
+                        rtcReconnectAttempts++;
+                        setTimeout(() => {
+                            setupWebRTC();
+                        }, Math.min(1000 * rtcReconnectAttempts, 5000));
+                    }
+                };
+
+                const offer = await pc.createOffer({
+                    offerToReceiveVideo: true
+                });
+                await pc.setLocalDescription(offer);
+
+                const response = await fetch('/offer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const answer = await response.json();
+                await pc.setRemoteDescription(answer);
+            } catch (error) {
+                console.error('WebRTC setup failed:', error);
+                showError();
+                rtcReconnectAttempts++;
+                setTimeout(() => {
+                    setupWebRTC();
+                }, Math.min(1000 * rtcReconnectAttempts, 5000));
+            }
+        }
+
+        // Video element event handlers
+        video.onloadeddata = () => {
+            loadingIndicator.style.display = 'none';
+            rtcReconnectAttempts = 0; // Reset attempts when video loads successfully
+        };
+
+        video.onerror = () => {
+            showError();
+            rtcReconnectAttempts++;
+            if (rtcReconnectAttempts < MAX_RTC_RECONNECT_ATTEMPTS) {
+                setTimeout(() => {
+                    setupWebRTC();
+                }, Math.min(1000 * rtcReconnectAttempts, 5000));
+            }
+        };
+
+        function sendMessage() {
+            const message = textarea.value.trim();
+            if (message) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(message);
+                        textarea.value = '';
+                        textarea.style.height = 'auto';
+                    } catch (error) {
+                        console.error("Error sending message:", error);
+                        // Try to reconnect if send fails
+                        ws = null;
+                        connectWebSocket();
+                    }
+                } else {
+                    console.log("WebSocket not connected, attempting to reconnect...");
+                    ws = null;
+                    connectWebSocket();
+                    // Store message to send after reconnection
+                    setTimeout(() => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(message);
+                            textarea.value = '';
+                            textarea.style.height = 'auto';
+                        } else {
+                            console.error("Failed to send message: WebSocket not connected");
+                        }
+                    }, 1000);
+                }
+            }
+        }
+
+        textarea.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
                 sendMessage();
             }
         });
 
-        // Initialize connections
+        // Initialize
         connectWebSocket();
-        setupWebRTC();
+        setupWebRTC().then(() => {
+            setTimeout(() => {
+                if (!isStreaming) {
+                    browserView.style.display = 'none';
+                    resizer.style.display = 'none';
+                    document.getElementById('chat-container').style.flex = '1';
+                }
+            }, 2000);
+        });
     </script>
 </body>
 </html> 

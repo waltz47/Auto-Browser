@@ -58,6 +58,9 @@ class Nyx:
         self.context = None
         self.page = None
         self.worker = None
+        
+        # Track active WebSocket connection
+        self._active_websocket = None
 
     def _create_required_directories(self):
         """Create required directories if they don't exist."""
@@ -127,11 +130,82 @@ class Nyx:
 
         @self.app.websocket("/ws")
         async def websocket_endpoint(websocket: WebSocket):
-            await self.handle_websocket(websocket)
+            # Check if we already have an active connection
+            if self._active_websocket is not None:
+                try:
+                    await websocket.accept()
+                    # Send a special message to trigger page refresh on the client side
+                    await websocket.send_text("__REFRESH_PAGE__")
+                    await websocket.close(code=1000, reason="Another connection is already active")
+                except:
+                    pass
+                return
 
-        @self.app.on_event("shutdown")
-        async def shutdown_event():
-            await self.cleanup()
+            await websocket.accept()
+            self._active_websocket = websocket
+            
+            try:
+                # Initialize browser if needed
+                if not self.page:
+                    await self.setup_browser()
+
+                # Initialize or update worker
+                worker = await self.create_worker(websocket)
+                
+                try:
+                    print("\n=== Nyx AI Initialized ===")
+                    print("Worker initialized and ready!")
+                    await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
+                except RuntimeError:
+                    return
+
+                while True:
+                    try:
+                        # Get message from websocket
+                        data = await websocket.receive_text()
+                        
+                        try:
+                            await websocket.send_text(f"\nUser: {data}\n")
+                            print(f"\n=== User Input ===\n{data}")
+                            
+                            # Add user input to message history
+                            worker.messages.add_user_text(data)
+                            
+                            # Process the task - continue until we need user input
+                            while True:
+                                active = await worker.step()
+                                if not active:
+                                    print("\n=== Ready for Next Input ===")
+                                    break
+
+                        except RuntimeError as e:
+                            if "Connection closed" in str(e):
+                                break
+                            raise
+
+                    except RuntimeError as e:
+                        if "Connection closed" in str(e):
+                            break
+                        raise
+                    except Exception as e:
+                        error_msg = f"Error processing message: {str(e)}"
+                        print(f"\n=== Error ===\n{error_msg}")
+                        try:
+                            await websocket.send_text(f"\nAn error occurred: {error_msg}")
+                        except:
+                            pass
+                        break
+
+            except Exception as e:
+                error_msg = f"WebSocket error: {str(e)}"
+                print(f"\n=== Error ===\n{error_msg}")
+            finally:
+                # Clean up worker reference and active websocket
+                if self.worker:
+                    self.worker.websocket = None
+                if self._active_websocket == websocket:
+                    self._active_websocket = None
+                print("WebSocket connection closed")
 
     async def setup_browser(self):
         """Initialize browser and create a page."""
@@ -143,12 +217,14 @@ class Nyx:
                     "--ignore-certificate-errors",
                     "--disable-extensions",
                     "--disable-blink-features=AutomationControlled",
+                    "--window-size=1920,1080"  # Set window size
                 ]
             )
             
             self.context = await self.browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
-                viewport={"width": 1280, "height": 720},  # Fixed viewport for consistent streaming
+                viewport={"width": 1920, "height": 1080},  # Increased viewport size to 1080p
+                screen={"width": 1920, "height": 1080},  # Match screen size with viewport
                 permissions=["geolocation"],
             )
             
@@ -247,8 +323,16 @@ class Nyx:
 
     async def handle_websocket(self, websocket: WebSocket):
         """Handle WebSocket connection."""
+        # Check if we already have an active connection
+        if self._active_websocket is not None:
+            try:
+                await websocket.close(code=1000, reason="Another connection is already active")
+            except:
+                pass
+            return
+
         await websocket.accept()
-        connection_open = True
+        self._active_websocket = websocket
         
         try:
             # Initialize browser if needed
@@ -257,44 +341,61 @@ class Nyx:
 
             # Initialize or update worker
             worker = await self.create_worker(websocket)
-            print("\n=== Nyx AI Initialized ===")
-            print("Worker initialized and ready!")
-            await websocket.send_text("Nyx AI is ready. Enter your task below.\n")
+            
+            try:
+                print("\n=== Nyx AI Initialized ===")
+                print("Worker initialized and ready!")
+                await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
+            except RuntimeError:
+                return
 
-            while connection_open:
+            while True:
                 try:
                     # Get message from websocket
                     data = await websocket.receive_text()
-                    await websocket.send_text(f"\nUser: {data}\n")
-                    print(f"\n=== User Input ===\n{data}")
                     
-                    # Add user input to message history
-                    worker.messages.add_user_text(data)
-                    
-                    # Process the task - continue until we need user input
-                    while True:
-                        active = await worker.step()
-                        if not active:
-                            print("\n=== Ready for Next Input ===")
+                    try:
+                        await websocket.send_text(f"\nUser: {data}\n")
+                        print(f"\n=== User Input ===\n{data}")
+                        
+                        # Add user input to message history
+                        worker.messages.add_user_text(data)
+                        
+                        # Process the task - continue until we need user input
+                        while True:
+                            active = await worker.step()
+                            if not active:
+                                print("\n=== Ready for Next Input ===")
+                                break
+
+                    except RuntimeError as e:
+                        if "Connection closed" in str(e):
                             break
+                        raise
 
                 except RuntimeError as e:
                     if "Connection closed" in str(e):
-                        connection_open = False
                         break
                     raise
+                except Exception as e:
+                    error_msg = f"Error processing message: {str(e)}"
+                    print(f"\n=== Error ===\n{error_msg}")
+                    try:
+                        await websocket.send_text(f"\nAn error occurred: {error_msg}")
+                    except:
+                        pass
+                    break
 
         except Exception as e:
-            error_msg = f"\n=== Error ===\n{str(e)}"
-            print(error_msg)
-            if connection_open:
-                try:
-                    await websocket.send_text("An error occurred. Please try again.")
-                except:
-                    pass
+            error_msg = f"WebSocket error: {str(e)}"
+            print(f"\n=== Error ===\n{error_msg}")
         finally:
+            # Clean up worker reference and active websocket
             if self.worker:
                 self.worker.websocket = None
+            if self._active_websocket == websocket:
+                self._active_websocket = None
+            print("WebSocket connection closed")
 
     async def cleanup(self):
         """Clean up resources."""

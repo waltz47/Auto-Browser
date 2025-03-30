@@ -234,7 +234,10 @@ Instructions:
             print(message)
         elif self.websocket:
             # Regular messages go to dashboard
-            await self.websocket.send_text(message)
+            try:
+                await self.websocket.send_text(message.strip())
+            except Exception as e:
+                print(f"Error sending to websocket: {e}")
         else:
             # If no websocket, everything goes to terminal
             print(message)
@@ -245,7 +248,11 @@ Instructions:
             # Print current messages for debugging (terminal only)
             await self.send_to_websocket("\n=== Current Messages ===", debug=True)
             for msg in self.messages.get_messages_for_api():
-                await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
+                # Skip printing image content
+                if msg.get('role') == 'user' and 'content' in msg and isinstance(msg['content'], list):
+                    await self.send_to_websocket(f"[{msg['role']}]: [Image data omitted]", debug=True)
+                else:
+                    await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
             await self.send_to_websocket("=== End Messages ===\n", debug=True)
 
             # Capture screenshot if page exists and vision is enabled
@@ -296,8 +303,8 @@ Instructions:
                     self.messages.add_message(message)
                     
                     # Send content to websocket if available
-                    if content:
-                        await self.send_to_websocket(f"\nAssistant: {content}")
+                    if content and content.strip():
+                        await self.send_to_websocket(f"\nAuto Browser: {content}")
                     
                     # Process tool calls
                     for tool_call in tool_calls:
@@ -315,6 +322,28 @@ Instructions:
                             try:
                                 tool_function = getattr(self, function_name)
                                 args_dict = json.loads(arguments)
+                                
+                                # Send user-friendly description of the tool call
+                                friendly_message = None
+                                if function_name == "move_to_url":
+                                    friendly_message = f"\nAuto Browser: Browsing to {args_dict.get('url', 'website')}"
+                                elif function_name == "get_url_contents":
+                                    friendly_message = "\nAuto Browser: Reading page contents"
+                                elif function_name == "send_keys_to_element":
+                                    friendly_message = f"\nAuto Browser: Typing '{args_dict.get('keys', '')}' into selected field"
+                                elif function_name == "click_element":
+                                    friendly_message = "\nAuto Browser: Clicking on selected element"
+                                elif function_name == "call_submit":
+                                    friendly_message = "\nAuto Browser: Submitting form"
+                                elif function_name == "highlight_element":
+                                    friendly_message = "\nAuto Browser: Highlighting element"
+                                elif function_name == "move_and_click_at_page_position":
+                                    friendly_message = "\nAuto Browser: Clicking at specific position"
+                                
+                                if friendly_message:
+                                    await self.send_to_websocket(friendly_message)
+                                
+                                # Execute the tool call
                                 result = await tool_function(**args_dict)
                                 await self.send_to_websocket(f"Tool {function_name}: {result}", debug=True)
                                 self.messages.add_tool_response(tool_call.id, result, function_name)
@@ -330,8 +359,9 @@ Instructions:
                     return True
                 else:
                     # Send the message to websocket and wait for user input
-                    await self.send_to_websocket(f"\nAssistant: {content}")
-                    self.messages.add_assistant_message(content)
+                    if content and content.strip():
+                        await self.send_to_websocket(f"\nAuto Browser: {content}")
+                        self.messages.add_assistant_message(content)
                     return False  # Stop here and wait for user input
 
             else:
