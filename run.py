@@ -56,4 +56,5 @@ def main():
         run_dashboard_mode()
 
 if __name__ == "__main__":
+    os.makedirs("log",exist_ok=True)
     main()

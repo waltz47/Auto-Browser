@@ -4,7 +4,8 @@ import json
 import asyncio
 from playwright.async_api import Page
 from openai import AsyncOpenAI
-from typing import Dict, Any
+from typing import Dict, Any, Union
+from pathlib import Path
 import traceback
 
 # Import web tools and messages
@@ -14,7 +15,7 @@ from tools import functions as web_tools
 from messages import MessageHistory, Message
 
 class Worker:
-    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None, websocket=None):
+    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None, websocket=None, enable_vision=False):
         """Initialize a worker with a browser page and configuration."""
         self.page = page
         self.worker_id = worker_id
@@ -29,6 +30,7 @@ class Worker:
         self.tools = tools or web_tools  # Use provided tools or default to web_tools
         self.messages = self._init_message_history()
         self.websocket = websocket  # Add websocket support
+        self.enable_vision = enable_vision  # Store vision flag
 
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
@@ -218,7 +220,7 @@ Instructions:
             if (count == 0):
                 return None, "Invalid XPath: No elements found"
             if (count > 1 and not first_only):
-                return None, f"There are multiple elements found for the xpath selector: {selector}. Pick the required one with >> n selector notation"
+                return None, f"There are multiple HTML elements found for the xpath selector: {selector}. Pick the required one with >> n selector notation. Eg: xpath=//div[@class='class-name']>>1"
             if first_only:
                 locator = locator.first
             return locator, None
@@ -245,6 +247,21 @@ Instructions:
             for msg in self.messages.get_messages_for_api():
                 await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
             await self.send_to_websocket("=== End Messages ===\n", debug=True)
+
+            # Capture screenshot if page exists and vision is enabled
+            if self.page and self.enable_vision:
+                try:
+                    screenshot = await self.page.screenshot(type='jpeg', quality=80)
+                    if screenshot:
+                        # Save screenshot temporarily
+                        temp_path = "log/temp_screenshot.jpg"
+                        with open(temp_path, "wb") as f:
+                            f.write(screenshot)
+                        # Add screenshot to messages
+                        self.messages.add_user_with_image("Current browser view:", temp_path)
+                        await self.send_to_websocket("Added screenshot to API call", debug=True)
+                except Exception as e:
+                    await self.send_to_websocket(f"Error capturing screenshot: {e}", debug=True)
 
             # Get response from API
             response = await self.client.chat.completions.create(

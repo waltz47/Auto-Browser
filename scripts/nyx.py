@@ -226,6 +226,9 @@ class Nyx:
     async def create_worker(self, websocket=None) -> Worker:
         """Create and initialize a single worker."""
         if not self.worker:
+            # Convert string 'true'/'false' to boolean
+            enable_vision = self.config.get("enable_vision", "false").lower() == "true"
+            
             self.worker = Worker(
                 page=self.page,
                 worker_id=0,
@@ -234,7 +237,8 @@ class Nyx:
                 model=self.MODEL,
                 max_messages=100,
                 tools=self.tools,
-                websocket=websocket
+                websocket=websocket,
+                enable_vision=enable_vision  # Pass the vision flag
             )
             await self.worker.setup_client()
         else:
