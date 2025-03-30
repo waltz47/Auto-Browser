@@ -1,158 +1,88 @@
 import os
-import sys
 import asyncio
-from queue import Queue
 from playwright.async_api import async_playwright
 from worker import Worker
-import pygetwindow as gw
-import time
-import csv
-import openai  # Assuming OpenAI API is used for initial input processing
 import json
-from messages import *
 from openai import AsyncOpenAI
-import pandas as pd
-import traceback
-
-async def async_input(prompt: str, queue: asyncio.Queue):
-    """Asynchronously wait for user input and put it in a queue."""
-    loop = asyncio.get_event_loop()
-    print(f"Prompting for input: {prompt}")
-    try:
-        user_input = await loop.run_in_executor(None, lambda: input(prompt))
-        print(f"Adding to queue for {prompt}: {user_input}")
-        await queue.put(user_input)
-    except Exception as e:
-        print(f"Error getting input: {e}")
-        await queue.put("Error getting input")
+from fastapi import FastAPI, WebSocket, Body
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from pathlib import Path
+import numpy as np
+from PIL import Image
+import io
+from pydantic import BaseModel
+import weakref
 
 class Nyx:
-    input_list = []
-
-    NYX_PROMPT = """You are an AI orchestrator designed to manage and coordinate multiple agents for complex tasks. You can:
-    1. create_csv: Create a CSV file that stores the tasks to be done. Usage: create_csv <filename> <task1> <task2> ...
-    2. use_csv: Start autonomous agents on the given CSV. Usage: use_csv <path to csv>
-    3. create_agent: Create a new agent for a specific task
-    4. destroy_agent: Destroy an agent when its task is complete
-    
-    Break down complex requests into sequential subtasks that agents can perform. Tasks should be specific and actionable.
-    
-    IMPORTANT: Consolidate related tasks that can be performed by a single agent. Only create separate agents when:
-    1. Tasks require different expertise or capabilities
-    2. Tasks must be performed in parallel
-    3. Tasks depend on different sources of information
-    
-    For example, "search for hotels and book a room" should be handled by a single agent, not split across multiple agents.
-    
-    When creating a plan:
-    1. Identify the main steps needed to complete the overall goal
-    2. Consolidate related actions into a single task when possible
-    3. Only set dependencies between tasks that genuinely need to be performed by different agents
-    4. Make each task comprehensive enough to handle logical sequences of actions"""
-
     def __init__(self):
-        """Initialize Nyx with a clean state."""
-        # Reset all state variables
-        self.input_list = []
-        self.MAX_MESSAGES = 100
-        self.request_queue = Queue()
-        self.workers = []
-        self.worker_tasks = {}
-        self.input_queues = {}
-        self.error_queues = {}  # New: queues for error reporting
-        self.results = {}
-        self.task_dependencies = {}
-        self.available_worker_ids = set()
-        
+        """Initialize Nyx with basic configuration."""
+        # Create required directories
+        self._create_required_directories()
+
         # Load configuration
         with open("api_config.cfg", 'r') as f:
             cfg = f.read()
 
-        config = {}
+        self.config = {}
         for line in cfg.split('\n'):
             if '=' in line:
                 key, value = line.split('=', 1)
-                config[key.strip()] = value.strip().strip('"')
-                print(f"{key.strip()}: {value.strip()}")
+                self.config[key.strip()] = value.strip().strip('"')
 
+        # Determine API type
         if os.environ.get("OPENAI_API_KEY") is not None:
-            print(f"Using OpenAI API. Model: {config['openai_model']}")
             self.api = "openai"
-            self.MODEL = config["openai_model"]
+            self.MODEL = self.config["openai_model"]
         elif os.environ.get("XAI_API_KEY") is not None:
-            print("Using XAI API")
             self.api = "xai"
-            self.MODEL = config["xai_model"]
+            self.MODEL = self.config["xai_model"]
         else:
-            print("Using Ollama.")
             self.api = "ollama"
-            self.MODEL = config["ollama_local_model"]
+            self.MODEL = self.config["ollama_local_model"]
 
-        with open("tools.json", 'r') as f:
-            self.tools = json.load(f)["tools"]
-        self.config = config
-
-    async def handle_initial_input(self, initial_input):
-        """Initialize Nyx components and handle initial input."""
-        print("=== Starting handle_initial_input ===")
-        # Initialize API client
-        api_key = os.environ.get('XAI_API_KEY')
-        if self.api == "xai" and not api_key:
-            print(f"XAI_API_KEY not set.")
-            sys.exit(1)
-        if self.api == "openai":
-            self.client = AsyncOpenAI()
-            print("OpenAI client initialized")
-        elif self.api == "xai":
-            self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-            print("XAI client initialized")
-        elif self.api == "ollama":
-            self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
-            print("Ollama client initialized")
-
-        # Initialize browser context if not already done
-        if not hasattr(self, 'playwright'):
-            print("Initializing Playwright and browser...")
-            try:
-                self.playwright = await async_playwright().start()
-                print("Playwright started")
-                
-                # Launch browser without persistent context
-                print("Launching browser...")
-                self.browser = await self.playwright.chromium.launch(
-                    headless=False,
-                    args=[
-                        "--ignore-certificate-errors", 
-                        "--disable-extensions",
-                        "--disable-blink-features=AutomationControlled",
-                    ]
-                )
-                
-                # Create a default context
-                print("Creating browser context...")
-                self.context = await self.browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
-                    viewport=None,
-                    permissions=["geolocation"],
-                )
-                
-                # Create initial page
-                print("Creating initial page...")
-                self.page = await self.context.new_page()
-                
-                print("Browser initialized successfully")
-            except Exception as e:
-                print(f"Error initializing browser: {e}")
-                traceback.print_exc()
-                raise
+        self.tools = None #worker can initialize directly
         
-        # If no input provided, we're just initializing
-        if not initial_input:
-            print("Empty input, just initializing components")
-            return
-            
-        print(f"Processing initial input: {initial_input}")
+        # Initialize video streaming attributes
+        self.video_track = None
+        self.pc = None
+        self.stream_task = None
         
+        # Initialize FastAPI app
+        self.app = FastAPI()
+        self.setup_routes()
+
+        # Initialize Playwright resources
+        self.playwright = None
+        self.browser = None
+        self.context = None
+        self.page = None
+        self.worker = None
+        
+        # Track active WebSocket connection
+        self._active_websocket = None
+
+    def _create_required_directories(self):
+        """Create required directories if they don't exist."""
+        required_dirs = ['static', 'templates']
+        for dir_name in required_dirs:
+            dir_path = Path(dir_name)
+            if not dir_path.exists():
+                dir_path.mkdir(parents=True)
+                print(f"Created directory: {dir_path}")
+        
+        # Check if dashboard template exists
+        template_path = Path("templates/dashboard.html")
+        if not template_path.exists():
+            print(f"Warning: Dashboard template not found at {template_path}")
+            print("Please ensure dashboard.html exists in the templates directory")
+
+    def setup_routes(self):
+        """Set up FastAPI routes."""
+        from fastapi import Body
+        from pydantic import BaseModel
+        
+<<<<<<< HEAD
         # Get planning response from API
         planning_prompt = f"""Given the following task, create a plan with agents to perform the tasks as required.
         Keep the breakdown minimal and focused, and consolidate tasks intelligently.
@@ -199,39 +129,79 @@ class Nyx:
                     {"role": "user", "content": planning_prompt}
                 ],
                 temperature=0.2  # Lower temperature for more focused task planning
+=======
+        class RTCOffer(BaseModel):
+            sdp: str
+            type: str
+
+        # Mount static files
+        self.app.mount("/static", StaticFiles(directory="static"), name="static")
+
+        # Setup routes
+        @self.app.get("/")
+        async def get():
+            template_path = Path("templates/dashboard.html")
+            if not template_path.exists():
+                return HTMLResponse("Error: Dashboard template not found. Please ensure dashboard.html exists in the templates directory.")
+            return HTMLResponse(template_path.read_text())
+
+        @self.app.post("/offer")
+        async def offer(params: RTCOffer):
+            from aiortc import RTCPeerConnection, RTCSessionDescription
+            import json
+
+            offer = RTCSessionDescription(
+                sdp=params.sdp,
+                type=params.type
+>>>>>>> single_agent
             )
-            print("Received planning response from API")
-        except Exception as e:
-            print(f"Error getting planning response: {e}")
-            traceback.print_exc()
-            # If planning fails, treat the input as a single task
-            planning_response = type('obj', (object,), {
-                'choices': [type('obj', (object,), {
-                    'message': type('obj', (object,), {
-                        'content': json.dumps({
-                            'tasks': [{'task': initial_input, 'dependencies': []}]
-                        })
-                    })
-                })]
-            })
-            print("Created fallback planning response")
-        
-        try:
-            # Parse the planning response into tasks
-            plan = planning_response.choices[0].message.content
-            print(f"Task breakdown plan: {plan}")
+
+            pc = RTCPeerConnection()
+            self.pc = pc  # Store reference to peer connection
+
+            @pc.on("connectionstatechange")
+            async def on_connectionstatechange():
+                if pc.connectionState == "failed":
+                    await pc.close()
+                    self.pc = None
+
+            # Create and add video track
+            if not self.video_track:
+                self.video_track = await self.create_video_track()
+            pc.addTrack(self.video_track)
+
+            # Handle the offer
+            await pc.setRemoteDescription(offer)
+            answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+
+            return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+        @self.app.websocket("/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            # Check if we already have an active connection
+            if self._active_websocket is not None:
+                try:
+                    await websocket.accept()
+                    # Send a special message to trigger page refresh on the client side
+                    await websocket.send_text("__REFRESH_PAGE__")
+                    await websocket.close(code=1000, reason="Another connection is already active")
+                except:
+                    pass
+                return
+
+            await websocket.accept()
+            self._active_websocket = websocket
             
-            # Extract tasks from the JSON response
             try:
-                # Strip markdown code block syntax if present
-                plan_text = plan.strip()
-                if plan_text.startswith("```"):
-                    plan_text = plan_text.split("\n", 1)[1]  # Remove first line
-                if plan_text.endswith("```"):
-                    plan_text = plan_text.rsplit("\n", 1)[0]  # Remove last line
-                if plan_text.startswith("json"):
-                    plan_text = plan_text.split("\n", 1)[1]  # Remove json line
+                # Initialize browser if needed
+                if not self.page:
+                    await self.setup_browser()
+
+                # Initialize or update worker
+                worker = await self.create_worker(websocket)
                 
+<<<<<<< HEAD
                 task_plan = json.loads(plan_text)
                 raw_tasks = task_plan.get('tasks', [])
                 
@@ -640,114 +610,246 @@ class Nyx:
             await asyncio.sleep(0.1)
             try:
                 while not self.request_queue.empty():
+=======
+                try:
+                    print("\n=== Nyx AI Initialized ===")
+                    print("Worker initialized and ready!")
+                    await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
+                except RuntimeError:
+                    return
+
+                while True:
+>>>>>>> single_agent
                     try:
-                        worker_id = self.request_queue.get_nowait()
-                        if worker_id not in self.input_queues or worker_id >= len(self.workers) or not self.workers[worker_id]:
-                            print(f"Warning: Worker {worker_id} not found or invalid")
-                            self.request_queue.task_done()
-                            continue
+                        # Get message from websocket
+                        data = await websocket.receive_text()
+                        
+                        try:
+                            await websocket.send_text(f"\nUser: {data}\n")
+                            print(f"\n=== User Input ===\n{data}")
                             
-                        queue = self.input_queues[worker_id]
-                        print(f"Input requested by Worker {worker_id}, queue size before prompt: {queue.qsize()}")
-                        
-                        # Get input from user
-                        current_task = self.workers[worker_id].current_task if hasattr(self.workers[worker_id], 'current_task') else "Unknown task"
-                        prompt = f"Input for Worker {worker_id} ({current_task}): "
-                        
-                        # Create a separate queue for this specific input request
-                        input_queue = asyncio.Queue()
-                        
-                        # Create a task to handle the input and set a timeout
-                        input_task = asyncio.create_task(async_input(prompt, input_queue))
-                        
-                        try:
-                            # Wait for user input with timeout
-                            user_input = await asyncio.wait_for(input_queue.get(), timeout=60)
-                            print(f"Providing input for Worker {worker_id}: {user_input}")
-                            await queue.put(user_input)
-                        except asyncio.TimeoutError:
-                            print(f"Timeout waiting for input for Worker {worker_id}")
-                            await queue.put("Timeout waiting for input")
-                        finally:
-                            if not input_task.done():
-                                input_task.cancel()
-                                
-                        self.request_queue.task_done()
+                            # Process the task with planning
+                            active = await worker.process_user_input(data)
+                            if active:
+                                # Process the planned steps
+                                while True:
+                                    active = await worker.step()
+                                    if not active:
+                                        print("\n=== Ready for Next Input ===")
+                                        break
+
+                        except RuntimeError as e:
+                            if "Connection closed" in str(e):
+                                break
+                            raise
+
+                    except RuntimeError as e:
+                        if "Connection closed" in str(e):
+                            break
+                        raise
                     except Exception as e:
-                        print(f"Error handling input request: {e}")
-                        traceback.print_exc()
+                        error_msg = f"Error processing message: {str(e)}"
+                        print(f"\n=== Error ===\n{error_msg}")
                         try:
-                            self.request_queue.task_done()
+                            await websocket.send_text(f"\nAn error occurred: {error_msg}")
                         except:
                             pass
+                        break
+
             except Exception as e:
-                print(f"Fatal error in input request handler: {e}")
-                traceback.print_exc()
-                await asyncio.sleep(1)  # Prevent tight loop in case of recurring errors
+                error_msg = f"WebSocket error: {str(e)}"
+                print(f"\n=== Error ===\n{error_msg}")
+            finally:
+                # Clean up worker reference and active websocket
+                if self.worker:
+                    self.worker.websocket = None
+                if self._active_websocket == websocket:
+                    self._active_websocket = None
+                print("WebSocket connection closed")
 
-    async def handle_worker_errors(self):
-        """Handle error reports from workers."""
-        while True:
-            for worker_id, error_queue in self.error_queues.items():
-                try:
-                    while not error_queue.empty():
-                        error_data = await error_queue.get()
-                        print(f"Error from Worker {worker_id}: {error_data}")
-                        
-                        # Update results with error state
-                        self.results[worker_id] = {
-                            'task': error_data['task'],
-                            'status': 'error',
-                            'error_type': error_data['error_type'],
-                            'error_message': error_data['error_message'],
-                            'timestamp': error_data['timestamp']
-                        }
-                        
-                        # If it's a fatal error, consider destroying the agent
-                        if error_data['error_type'] in ['configuration_error', 'api_error']:
-                            print(f"Fatal error in Worker {worker_id}, destroying agent")
-                            await self.destroy_agent(worker_id)
-                except Exception as e:
-                    print(f"Error handling worker errors: {e}")
-            await asyncio.sleep(0.1)
-
-    async def start(self):
-        """Start the Nyx system."""
-        print("Starting Nyx system")
-        
-        # Start input and error handlers
-        input_task = asyncio.create_task(self.handle_input_requests())
-        error_task = asyncio.create_task(self.handle_worker_errors())
-        print("Input and error handler tasks created")
-
-        # Wait for all worker tasks to complete
-        try:
-            if self.worker_tasks:
-                print(f"Waiting for {len(self.worker_tasks)} worker tasks to complete")
-                # Use asyncio.gather instead of wait to ensure all tasks complete
-                await asyncio.gather(*self.worker_tasks.values(), return_exceptions=True)
-                print("All worker tasks have completed")
-            else:
-                print("No worker tasks to wait for")
-                # If no worker tasks, just wait a bit to keep the system running
-                await asyncio.sleep(10)
-                
-            # Cancel input and error handlers after workers are done
-            print("Cancelling input and error handler tasks")
-            input_task.cancel()
-            error_task.cancel()
+    async def setup_browser(self):
+        """Initialize browser and create a page."""
+        if not self.playwright:
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,  # Run in headless mode
+                args=[
+                    "--ignore-certificate-errors",
+                    "--disable-extensions",
+                    "--disable-blink-features=AutomationControlled",
+                    "--window-size=1920,1080"  # Set window size
+                ]
+            )
             
-        except asyncio.CancelledError:
-            print("Nyx shutting down due to cancellation...")
-            for task in self.worker_tasks.values():
-                if not task.done():
-                    task.cancel()
-            input_task.cancel()
-            error_task.cancel()
+            self.context = await self.browser.new_context(
+                viewport={"width": 1920, "height": 1080},  # Increased viewport size to 1080p
+                screen={"width": 1920, "height": 1080},  # Match screen size with viewport
+                permissions=["geolocation"],
+            )
+            
+            self.page = await self.context.new_page()
+            await self.page.goto("about:blank")  # Navigate to a blank page to ensure page is ready
+
+    async def get_video_frame(self):
+        """Capture current page as video frame."""
+        if self.page:
+            screenshot = await self.page.screenshot(type='jpeg', quality=80)
+            return screenshot
+        return None
+
+    async def create_video_track(self):
+        """Create a VideoStreamTrack from browser page."""
+        from aiortc.mediastreams import MediaStreamTrack
+        import av
+        import fractions
+        import asyncio
+        import numpy as np
+        from PIL import Image
+        import io
+        import weakref
+        
+        class BrowserVideoStreamTrack(MediaStreamTrack):
+            kind = "video"
+
+            def __init__(self, nyx_instance):
+                super().__init__()
+                self.nyx = weakref.ref(nyx_instance)  # Weak reference to avoid circular reference
+                self._frame_count = 0
+                self._stopped = False
+
+            async def recv(self):
+                if self._stopped:
+                    return None
+
+                try:
+                    nyx = self.nyx()
+                    if nyx is None or nyx.page is None:
+                        raise ValueError("Page is not available")
+
+                    screenshot = await nyx.page.screenshot(type='jpeg', quality=80)
+                    if screenshot is None:
+                        raise ValueError("Failed to capture screenshot")
+
+                    # Convert screenshot to numpy array
+                    image = Image.open(io.BytesIO(screenshot))
+                    frame_data = np.array(image)
+                    
+                    # Create video frame
+                    frame = av.VideoFrame.from_ndarray(frame_data, format='rgb24')
+                    frame.pts = self._frame_count
+                    frame.time_base = fractions.Fraction(1, 30)  # 30 fps
+                    self._frame_count += 1
+                    return frame
+
+                except Exception as e:
+                    print(f"Error capturing frame: {e}")
+                    # Return a blank frame on error
+                    blank_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+                    frame = av.VideoFrame.from_ndarray(blank_frame, format='rgb24')
+                    frame.pts = self._frame_count
+                    frame.time_base = fractions.Fraction(1, 30)
+                    self._frame_count += 1
+                    return frame
+
+            async def stop(self):
+                self._stopped = True
+                await super().stop()
+
+        # Create and return the video track
+        return BrowserVideoStreamTrack(self)
+
+    async def create_worker(self, websocket=None) -> Worker:
+        """Create and initialize a single worker."""
+        if not self.worker:
+            # Convert string 'true'/'false' to boolean
+            enable_vision = self.config.get("enable_vision", "false").lower() == "true"
+            
+            self.worker = Worker(
+                page=self.page,
+                worker_id=0,
+                request_queue=None,
+                api=self.api,
+                model=self.MODEL,
+                max_messages=100,
+                tools=self.tools,
+                websocket=websocket,
+                enable_vision=enable_vision  # Pass the vision flag
+            )
+            await self.worker.setup_client()
+        else:
+            self.worker.websocket = websocket
+        return self.worker
+
+    async def handle_websocket(self, websocket: WebSocket):
+        """Handle WebSocket connection."""
+        # Check if we already have an active connection
+        if self._active_websocket is not None:
+            try:
+                await websocket.close(code=1000, reason="Another connection is already active")
+            except:
+                pass
+            return
+
+        await websocket.accept()
+        self._active_websocket = websocket
+        
+        try:
+            # Initialize browser if needed
+            if not self.page:
+                await self.setup_browser()
+
+            # Initialize or update worker
+            worker = await self.create_worker(websocket)
+            
+            try:
+                print("\n=== Nyx AI Initialized ===")
+                print("Worker initialized and ready!")
+                await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
+            except RuntimeError:
+                return
+
+            while True:
+                try:
+                    # Get message from websocket
+                    data = await websocket.receive_text()
+                    
+                    try:
+                        await websocket.send_text(f"\nUser: {data}\n")
+                        print(f"\n=== User Input ===\n{data}")
+                        
+                        # Process the task with planning
+                        active = await worker.process_user_input(data)
+                        if active:
+                            # Process the planned steps
+                            while True:
+                                active = await worker.step()
+                                if not active:
+                                    print("\n=== Ready for Next Input ===")
+                                    break
+
+                    except RuntimeError as e:
+                        if "Connection closed" in str(e):
+                            break
+                        raise
+
+                except RuntimeError as e:
+                    if "Connection closed" in str(e):
+                        break
+                    raise
+                except Exception as e:
+                    error_msg = f"Error processing message: {str(e)}"
+                    print(f"\n=== Error ===\n{error_msg}")
+                    try:
+                        await websocket.send_text(f"\nAn error occurred: {error_msg}")
+                    except:
+                        pass
+                    break
+
         except Exception as e:
-            print(f"Error in Nyx start: {e}")
-            traceback.print_exc()
+            error_msg = f"WebSocket error: {str(e)}"
+            print(f"\n=== Error ===\n{error_msg}")
         finally:
+<<<<<<< HEAD
             print("Nyx execution completed, cleaning up resources")
             # Don't close browser here - let the dashboard handle it
             # This prevents premature browser closure
@@ -918,3 +1020,41 @@ class Nyx:
         
         print(f"Task consolidation complete. Reduced from {len(tasks)} to {len(consolidated_tasks)} tasks.")
         return consolidated_tasks
+=======
+            # Clean up worker reference and active websocket
+            if self.worker:
+                self.worker.websocket = None
+            if self._active_websocket == websocket:
+                self._active_websocket = None
+            print("WebSocket connection closed")
+
+    async def cleanup(self):
+        """Clean up resources."""
+        if self.pc:
+            await self.pc.close()
+            self.pc = None
+        if self.video_track:
+            await self.video_track.stop()
+            self.video_track = None
+        if self.page:
+            await self.page.close()
+            self.page = None
+        if self.context:
+            await self.context.close()
+            self.context = None
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self.playwright:
+            await self.playwright.stop()
+            self.playwright = None
+
+    def run_dashboard(self, host="0.0.0.0", port=8000):
+        """Run the web dashboard."""
+        import uvicorn
+        uvicorn.run(self.app, host=host, port=port)
+
+if __name__ == "__main__":
+    nyx = Nyx()
+    nyx.run_dashboard()
+>>>>>>> single_agent

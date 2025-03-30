@@ -1,60 +1,61 @@
+import os
 import sys
 import asyncio
 import argparse
-import pandas as pd
-from threading import Thread
-import time
-import traceback
-import os
+from playwright.async_api import async_playwright
+import json
 
-sys.path.append("scripts")
-sys.path.append("scripts/web")
-sys.path.append("scripts/dashboard")
+# Add scripts directory to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
+from worker import Worker
+from scripts.nyx import Nyx
 
-try:
-    from nyx import Nyx
-    print("Imported Nyx successfully")
-    from dashboard import DashboardNyx, init_dashboard, app, socketio
-    print("Imported DashboardNyx, app, and socketio successfully")
-except ImportError as e:
-    print(f"Import error: {e}")
-    traceback.print_exc()
-    sys.exit(1)
+async def run_terminal_mode():
+    """Run Nyx in terminal mode."""
+    nyx = Nyx()
+    await nyx.setup_browser()
+    worker = await nyx.create_worker()
+    
+    print("\nWorker initialized and ready!")
+    print("Enter your task or type 'exit' to quit")
 
-def start_dashboard(host='0.0.0.0', port=5000):
-    """Start the dashboard server."""
     try:
-        print(f"Starting dashboard server at http://{host}:{port}")
-        print(f"Open http://localhost:{port} in your browser to view the dashboard")
-        socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True, debug=False)
-    except Exception as e:
-        print(f"Error starting dashboard server: {e}")
-        traceback.print_exc()
+        while True:
+            user_input = input("\nEnter task: ")
+            if user_input.lower() == 'exit':
+                break
 
-async def run_nyx(nyx_instance, initial_input):
-    """Run Nyx with the given input."""
-    try:
-        print(f"Handling initial input: {initial_input}")
-        await nyx_instance.handle_initial_input(initial_input)
-        print("Starting Nyx")
-        await nyx_instance.start()
-    except Exception as e:
-        print(f"Error in Nyx execution: {e}")
-        traceback.print_exc()
-        raise
+            # Add user input to message history
+            worker.messages.add_user_text(user_input)
+            
+            # Process task
+            while True:
+                active = await worker.step()
+                if not active or worker.waiting_for_input:
+                    break
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run Nyx or Nyx with Dashboard")
-    parser.add_argument("--dashboard", action="store_true", help="Run with dashboard enabled")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    parser.add_argument("--input", type=str, help="Initial input for the system")
+    except KeyboardInterrupt:
+        print("\nExiting...")
+    finally:
+        await nyx.cleanup()
+
+def run_dashboard_mode():
+    """Run Nyx in dashboard mode."""
+    nyx = Nyx()
+    nyx.run_dashboard()
+
+def main():
+    parser = argparse.ArgumentParser(description='Run Nyx AI in terminal or dashboard mode')
+    parser.add_argument('--mode', choices=['terminal', 'dashboard'], default='terminal',
+                      help='Run mode: terminal or dashboard (default: terminal)')
     args = parser.parse_args()
 
-    # Set up debug mode if requested
-    if args.debug:
-        print("Debug mode enabled")
-        os.environ["DEBUG"] = "1"
+    if args.mode == 'terminal':
+        asyncio.run(run_terminal_mode())
+    else:
+        run_dashboard_mode()
 
+<<<<<<< HEAD
     try:
         # In production (like Render), we don't want to prompt for input
         if os.environ.get('RENDER'):
@@ -119,3 +120,8 @@ if __name__ == '__main__':
         print(f"Unexpected error: {e}")
         traceback.print_exc()
         sys.exit(1)
+=======
+if __name__ == "__main__":
+    os.makedirs("log",exist_ok=True)
+    main()
+>>>>>>> single_agent
