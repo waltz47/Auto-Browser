@@ -47,6 +47,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run Nyx or Nyx with Dashboard")
     parser.add_argument("--dashboard", action="store_true", help="Run with dashboard enabled")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--input", type=str, help="Initial input for the system")
     args = parser.parse_args()
 
     # Set up debug mode if requested
@@ -55,7 +56,12 @@ if __name__ == '__main__':
         os.environ["DEBUG"] = "1"
 
     try:
-        initial_input = input("Enter input: ")
+        # In production (like Render), we don't want to prompt for input
+        if os.environ.get('RENDER'):
+            initial_input = "Hello! I'm ready to help."  # Default greeting
+        else:
+            initial_input = args.input if args.input else input("Enter input: ")
+            
         if not initial_input.strip():
             print("Error: No input provided")
             sys.exit(1)

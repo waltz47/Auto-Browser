@@ -35,7 +35,20 @@ class Nyx:
     3. create_agent: Create a new agent for a specific task
     4. destroy_agent: Destroy an agent when its task is complete
     
-    Analyze tasks and create/destroy agents as needed based on task complexity and dependencies."""
+    Break down complex requests into sequential subtasks that agents can perform. Tasks should be specific and actionable.
+    
+    IMPORTANT: Consolidate related tasks that can be performed by a single agent. Only create separate agents when:
+    1. Tasks require different expertise or capabilities
+    2. Tasks must be performed in parallel
+    3. Tasks depend on different sources of information
+    
+    For example, "search for hotels and book a room" should be handled by a single agent, not split across multiple agents.
+    
+    When creating a plan:
+    1. Identify the main steps needed to complete the overall goal
+    2. Consolidate related actions into a single task when possible
+    3. Only set dependencies between tasks that genuinely need to be performed by different agents
+    4. Make each task comprehensive enough to handle logical sequences of actions"""
 
     def __init__(self):
         """Initialize Nyx with a clean state."""
@@ -141,26 +154,40 @@ class Nyx:
         print(f"Processing initial input: {initial_input}")
         
         # Get planning response from API
-        planning_prompt = f"""Given the following task, break it down into independent subtasks that can be assigned to different agents.
-        Keep the breakdown minimal and focused on the main tasks only.
+        planning_prompt = f"""Given the following task, create a plan with agents to perform the tasks as required.
+        Keep the breakdown minimal and focused, and consolidate tasks intelligently.
         
         Task: {initial_input}
         
         Respond with a JSON object in this format:
         {{
             "tasks": [
-                {{"task": "Research SpaceX's latest developments, launches, and technology", "dependencies": []}},
-                {{"task": "Research RocketLab's latest developments, launches, and technology", "dependencies": []}},
-                {{"task": "Research Blue Origin's latest developments, launches, and technology", "dependencies": []}}
+                {{"task": "First subtask description", "dependencies": []}},
+                {{"task": "Second subtask description", "dependencies": [0]}},
+                {{"task": "Third subtask description that depends on first and second", "dependencies": [0, 1]}}
             ]
         }}
         
-        Guidelines:
-        1. Create only the essential research tasks
-        2. Focus on the core research objective for each company/topic
-        3. Keep task descriptions clear and actionable
-        4. Do not include agent creation/management in task descriptions
-        5. Each task should be independent and self-contained
+        IMPORTANT GUIDELINES:
+        1. CONSOLIDATE RELATED ACTIONS INTO SINGLE TASKS. Do not split tasks that can logically be done by the same agent.
+           Examples of tasks that should be combined into ONE task:
+           - "Search for a hotel and book a room" (NOT two separate tasks)
+           - "Find a restaurant and make a reservation" (NOT two separate tasks)
+           - "Research a topic and write a summary" (NOT two separate tasks)
+           - "Navigate to a website and fill out a form" (NOT two separate tasks)
+           
+        2. Only create separate tasks when they:
+           - Require fundamentally different capabilities
+           - Need to be executed in parallel
+           - Depend on information that must be gathered by different agents
+           
+        3. Make tasks comprehensive - each task should include all related steps a single agent could reasonably perform.
+        
+        4. Only create dependencies when a task genuinely cannot begin until another task is completed.
+        
+        5. Keep the total number of tasks to the absolute minimum necessary.
+        
+        6. Dependencies should be listed as indices of previous tasks (zero-based).
         """
         
         try:
@@ -206,47 +233,60 @@ class Nyx:
                     plan_text = plan_text.split("\n", 1)[1]  # Remove json line
                 
                 task_plan = json.loads(plan_text)
-                tasks = task_plan.get('tasks', [])
+                raw_tasks = task_plan.get('tasks', [])
                 
-                # Validate tasks
-                filtered_tasks = []
-                seen_tasks = set()
-                for task in tasks:
-                    # Extract research task from combined description
-                    task_desc = task['task']
-                    if "and research" in task_desc.lower():
-                        task_desc = task_desc.split("and research", 1)[1].strip()
-                    elif "research" in task_desc.lower():
-                        task_desc = task_desc
-                    else:
+                # Process tasks - no filtering based on task type
+                tasks = []
+                seen_task_descriptions = set()
+                
+                for task in raw_tasks:
+                    # Extract task description
+                    task_desc = task['task'].strip()
+                    
+                    # Skip empty tasks
+                    if not task_desc:
                         continue
                         
                     # Skip duplicate tasks
                     task_lower = task_desc.lower()
-                    if task_lower in seen_tasks:
+                    if task_lower in seen_task_descriptions:
                         continue
-                    seen_tasks.add(task_lower)
+                    seen_task_descriptions.add(task_lower)
                     
-                    # Create clean task
-                    filtered_tasks.append({
-                        "task": f"Research {task_desc}",
+                    # Add task with original description
+                    tasks.append({
+                        "task": task_desc,
                         "dependencies": task.get('dependencies', [])
                     })
                 
-                tasks = filtered_tasks
-                print(f"Successfully parsed {len(tasks)} tasks from plan")
+                # Apply task consolidation to reduce unnecessary agents
+                tasks = self._consolidate_tasks(tasks)
+                print(f"Successfully parsed and consolidated to {len(tasks)} tasks from plan")
             except json.JSONDecodeError:
                 print("Error parsing task plan JSON, using single task")
                 tasks = [{"task": initial_input, "dependencies": []}]
             
             # Create an agent for each task
             created_workers = []
+            task_to_worker_id = {}  # Map task indices to worker IDs for dependency resolution
+            
             for i, task in enumerate(tasks):
                 print(f"Creating agent for task {i+1}/{len(tasks)}: {task['task']}")
+                
+                # Convert task index dependencies to worker ID dependencies
+                worker_dependencies = []
+                for dep in task.get("dependencies", []):
+                    if isinstance(dep, int) and dep in task_to_worker_id:
+                        worker_dependencies.append(task_to_worker_id[dep])
+                
+                # Create the agent with resolved dependencies
                 worker_id = await self.create_agent(
                     task_description=task["task"],
-                    dependencies=task.get("dependencies", [])  # Use get() with default empty list
+                    dependencies=worker_dependencies
                 )
+                
+                # Store the mapping from task index to worker ID
+                task_to_worker_id[i] = worker_id
                 created_workers.append(worker_id)
                 print(f"Created agent {worker_id} for task: {task['task']}")
                 
@@ -327,6 +367,24 @@ class Nyx:
     async def create_agent(self, task_description: str, dependencies: list = None) -> int:
         """Create a new agent for a specific task."""
         try:
+            # Ensure dependencies is a list
+            if dependencies is None:
+                dependencies = []
+            elif not isinstance(dependencies, list):
+                dependencies = [dependencies]
+                
+            # Convert any non-integer dependencies to their worker IDs if possible
+            resolved_dependencies = []
+            for dep in dependencies:
+                if isinstance(dep, int):
+                    # Validate worker ID exists
+                    if 0 <= dep < len(self.workers) and self.workers[dep] is not None:
+                        resolved_dependencies.append(dep)
+                else:
+                    # Dependency is not an integer - might be a task description or other identifier
+                    # This could be enhanced in the future if needed
+                    print(f"Warning: Non-integer dependency {dep} skipped")
+                    
             # Find the next available worker ID
             worker_id = len(self.workers)
             if self.available_worker_ids:
@@ -334,6 +392,7 @@ class Nyx:
                 self.available_worker_ids.remove(worker_id)
 
             print(f"Creating agent {worker_id} for task: {task_description}")
+            print(f"Agent dependencies: {resolved_dependencies}")
 
             # Create new browser page
             try:
@@ -393,14 +452,15 @@ class Nyx:
                 worker.set_queues(self.input_queues[worker_id], self.error_queues[worker_id])
                 
                 # Set up task dependencies
-                if dependencies:
-                    self.task_dependencies[worker_id] = dependencies
-                    print(f"Worker {worker_id} depends on workers: {dependencies}")
+                if resolved_dependencies:
+                    self.task_dependencies[worker_id] = resolved_dependencies
+                    print(f"Worker {worker_id} depends on workers: {resolved_dependencies}")
                 
                 # Initialize results entry
                 self.results[worker_id] = {
                     'task': task_description,
                     'status': 'initializing',
+                    'dependencies': resolved_dependencies,
                     'last_action': None
                 }
                 
@@ -480,6 +540,16 @@ class Nyx:
             if worker.worker_id in self.task_dependencies:
                 deps = self.task_dependencies[worker.worker_id]
                 print(f"Worker {worker.worker_id} waiting for dependencies: {deps}")
+                
+                # Update status to waiting for dependencies
+                self.results[worker.worker_id] = {
+                    'task': worker.current_task,
+                    'status': 'waiting_for_dependencies',
+                    'dependencies': deps,
+                    'last_action': f"Waiting for tasks {deps} to complete"
+                }
+                
+                # Poll for dependency completion
                 while True:
                     deps_completed = all(
                         self.results.get(dep_id, {}).get('status') == 'completed'
@@ -495,10 +565,13 @@ class Nyx:
                         for dep_id in deps
                     )
                     if deps_errored:
-                        print(f"Worker {worker.worker_id} dependencies have errors, cannot proceed")
-                        raise Exception(f"Dependencies for worker {worker.worker_id} have errors")
+                        error_deps = [dep_id for dep_id in deps 
+                                     if self.results.get(dep_id, {}).get('status') == 'error']
+                        error_msg = f"Dependencies for worker {worker.worker_id} have errors: {error_deps}"
+                        print(error_msg)
+                        raise Exception(error_msg)
                         
-                    print(f"Worker {worker.worker_id} waiting for dependencies")
+                    print(f"Worker {worker.worker_id} waiting for dependencies {deps}")
                     await asyncio.sleep(1)
             
             # Update status to active
@@ -515,16 +588,23 @@ class Nyx:
                 
                 # Store results
                 if active:
+                    # Get the most recent message content
+                    last_message = None
+                    if hasattr(worker, 'messages') and worker.messages.messages:
+                        last_messages = [msg for msg in worker.messages.messages if msg.role == 'assistant']
+                        if last_messages:
+                            last_message = last_messages[-1].content
+                    
                     self.results[worker.worker_id] = {
                         'task': worker.current_task,
                         'status': 'active',
-                        'last_action': worker.messages.messages[-1].content if worker.messages.messages else None
+                        'last_action': last_message or "Processing task"
                     }
                 else:
                     self.results[worker.worker_id] = {
                         'task': worker.current_task,
                         'status': 'completed',
-                        'last_action': worker.messages.messages[-1].content if worker.messages.messages else None,
+                        'last_action': "Task completed successfully",
                         'completion_time': time.time()
                     }
                     print(f"Worker {worker.worker_id} has completed its task")
@@ -678,3 +758,163 @@ class Nyx:
             # print("Browser and Playwright stopped")
             
         print("Nyx system execution completed")
+
+    def _consolidate_tasks(self, tasks):
+        """Consolidate related tasks that could be handled by a single agent.
+        
+        This reduces the number of agents by combining tasks that:
+        1. Have a direct dependency relationship
+        2. Are sequential and closely related
+        3. Don't have incoming dependencies from other tasks
+        """
+        if not tasks or len(tasks) <= 1:
+            return tasks
+            
+        print("Starting task consolidation...")
+        
+        # Create a dependency graph
+        depends_on = {}  # task_idx -> list of task indices it depends on
+        depended_by = {}  # task_idx -> list of task indices that depend on it
+        
+        for i, task in enumerate(tasks):
+            depends_on[i] = task.get('dependencies', [])
+            for dep in task.get('dependencies', []):
+                if dep not in depended_by:
+                    depended_by[dep] = []
+                depended_by[dep].append(i)
+        
+        # First pass: look for hotel/reservation booking sequences to consolidate more aggressively
+        consolidated_tasks = []
+        skip_indices = set()
+        
+        # Special handling for booking/reservation tasks - try to combine longer sequences
+        booking_related_indices = []
+        for i, task in enumerate(tasks):
+            task_desc = task['task'].lower()
+            if any(term in task_desc for term in ['hotel', 'book', 'reservation', 'room', 'search', 'find', 'fill', 'form', 'select', 'submit']):
+                booking_related_indices.append(i)
+        
+        # Try to find sequences of booking-related tasks
+        if len(booking_related_indices) >= 2:
+            booking_related_indices.sort()  # Sort by index to maintain order
+            
+            # Check if they form a dependency chain
+            is_chain = True
+            for i in range(1, len(booking_related_indices)):
+                curr_idx = booking_related_indices[i]
+                prev_idx = booking_related_indices[i-1]
+                
+                # Check if current depends on previous
+                if prev_idx not in tasks[curr_idx].get('dependencies', []):
+                    is_chain = False
+                    break
+            
+            # If we have a chain, consolidate the whole booking sequence
+            if is_chain and len(booking_related_indices) > 1:
+                print(f"Found booking sequence with {len(booking_related_indices)} tasks, consolidating...")
+                
+                # Get the first task in the chain
+                first_task_idx = booking_related_indices[0]
+                first_task = tasks[first_task_idx]
+                
+                # Combine all tasks in the chain
+                combined_desc = first_task['task']
+                for idx in booking_related_indices[1:]:
+                    combined_desc += f" and then {tasks[idx]['task']}"
+                
+                # Create combined task with dependencies of the first task
+                combined_task = {
+                    "task": combined_desc,
+                    "dependencies": first_task.get('dependencies', [])
+                }
+                
+                consolidated_tasks.append(combined_task)
+                
+                # Mark all tasks in the chain as skipped
+                for idx in booking_related_indices:
+                    skip_indices.add(idx)
+                
+                print(f"Consolidated booking sequence into: '{combined_desc}'")
+        
+        # Second pass: standard consolidation for remaining tasks
+        for i, task in enumerate(tasks):
+            if i in skip_indices:
+                continue
+                
+            # Check if this task has only one direct dependency
+            deps = task.get('dependencies', [])
+            
+            if len(deps) == 1 and deps[0] not in skip_indices:
+                dep_idx = deps[0]
+                dep_task = tasks[dep_idx]
+                
+                # Check if the dependency is only depended on by this task
+                if dep_idx in depended_by and len(depended_by[dep_idx]) == 1:
+                    # Check for related content using keywords
+                    task_desc = task['task'].lower()
+                    dep_desc = dep_task['task'].lower()
+                    
+                    # Keywords that indicate related tasks
+                    relation_indicators = [
+                        # Task type relationships
+                        dep_desc.startswith("search") and any(term in task_desc for term in ["use", "book", "select", "find"]),
+                        dep_desc.startswith("find") and any(term in task_desc for term in ["book", "select", "reserve"]),
+                        dep_desc.startswith("locate") and any(term in task_desc for term in ["visit", "navigate", "go to"]),
+                        "hotel" in dep_desc and any(term in task_desc for term in ["hotel", "room", "book", "reservation"]),
+                        "restaurant" in dep_desc and any(term in task_desc for term in ["restaurant", "reservation", "book", "table"]),
+                        "research" in dep_desc and any(term in task_desc for term in ["summarize", "write", "report"]),
+                        "fill" in task_desc and "form" in task_desc,
+                        "submit" in task_desc,
+                        "check" in task_desc and "out" in task_desc,
+                        
+                        # Sequential indicators
+                        "and then" in task_desc,
+                        "continue" in task_desc,
+                        task_desc.startswith("then"),
+                        task_desc.startswith("next"),
+                        task_desc.startswith("after"),
+                        
+                        # General web navigation patterns
+                        "navigate" in dep_desc and any(term in task_desc for term in ["click", "select", "fill", "input"]),
+                        "go to" in dep_desc and any(term in task_desc for term in ["click", "select", "fill", "input"])
+                    ]
+                    
+                    # If any relation indicators match, consolidate
+                    if any(relation_indicators):
+                        print(f"Consolidating tasks: '{dep_task['task']}' + '{task['task']}'")
+                        
+                        # Create combined task
+                        combined_task = {
+                            "task": f"{dep_task['task']} and then {task['task']}",
+                            "dependencies": dep_task.get('dependencies', [])
+                        }
+                        consolidated_tasks.append(combined_task)
+                        skip_indices.add(i)
+                        skip_indices.add(dep_idx)
+                        
+                        # Update dependency graph
+                        if dep_idx in depended_by:
+                            del depended_by[dep_idx]
+                        continue
+            
+            # If not consolidated, keep original task
+            if i not in skip_indices:
+                consolidated_tasks.append(task)
+        
+        # Fix dependency indices after consolidation
+        index_map = {}
+        for old_idx, task in enumerate(tasks):
+            if old_idx not in skip_indices:
+                new_idx = len([t for t in range(old_idx) if t not in skip_indices])
+                index_map[old_idx] = new_idx
+        
+        # Remap dependencies
+        for task in consolidated_tasks:
+            new_deps = []
+            for dep in task.get('dependencies', []):
+                if dep in index_map:
+                    new_deps.append(index_map[dep])
+            task['dependencies'] = new_deps
+        
+        print(f"Task consolidation complete. Reduced from {len(tasks)} to {len(consolidated_tasks)} tasks.")
+        return consolidated_tasks

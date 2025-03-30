@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: nyx-ai
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      playwright install
+      playwright install-deps
+    startCommand: python run.py --dashboard
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: PORT
+        value: 10000 
