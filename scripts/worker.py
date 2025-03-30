@@ -14,7 +14,7 @@ from tools import functions as web_tools
 from messages import MessageHistory, Message
 
 class Worker:
-    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None):
+    def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None, websocket=None):
         """Initialize a worker with a browser page and configuration."""
         self.page = page
         self.worker_id = worker_id
@@ -28,6 +28,7 @@ class Worker:
         self.current_task = "Initializing"
         self.tools = tools or web_tools  # Use provided tools or default to web_tools
         self.messages = self._init_message_history()
+        self.websocket = websocket  # Add websocket support
 
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
@@ -39,7 +40,7 @@ class Worker:
             print("No custom instructions found")
 
         tools_description = """
-You have access to the following tools to help you navigate and interact with web pages:
+IMPORTANT: You can ONLY use the following tools. Do not attempt to use any other functions:
 
 1. move_to_url(url: str) - Navigate to a specific URL
 2. get_url_contents() - Get the contents of the current page
@@ -48,15 +49,19 @@ You have access to the following tools to help you navigate and interact with we
 5. click_element(xpathSelector: str) - Click on an element
 6. highlight_element(xpathSelector: str) - Highlight an element for visibility
 7. move_and_click_at_page_position(x: float, y: float) - Click at specific coordinates
+
+Do not attempt to use any other functions that are not listed above. Functions like 'create_agent' are not available.
 """
 
         system_prompt = f'''You are a general purpose AI agent capable of performing web-based tasks. You can browse websites, search for information, and interact with web elements.
 
 Instructions:
-1. When you need to interact with the web, use the available tools
+1. When you need to interact with the web, use ONLY the available tools listed below
 2. When you need more information or clarification, ask the user directly
 3. Be thorough and methodical in your responses
 4. Maintain a natural conversation with the user
+5. Do NOT suggest or try to use tools that are not explicitly listed
+6. After completing a task or when waiting for user input, stop and wait for the next command
 
 {tools_description}
 
@@ -213,16 +218,29 @@ Instructions:
             if (count == 0):
                 return None, "Invalid XPath: No elements found"
             if (count > 1 and not first_only):
-                return None, f"Multiple elements found for {selector}. Specify with >> n notation"
+                return None, f"There are multiple elements found for the xpath selector: {selector}. Pick the required one with >> n selector notation"
             if first_only:
                 locator = locator.first
             return locator, None
         except Exception as e:
             return None, f"Error getting locator: {str(e)}"
 
+    async def send_to_websocket(self, message: str):
+        """Send a message to the websocket if available."""
+        if self.websocket:
+            await self.websocket.send_text(message)
+        else:
+            print(message)
+
     async def step(self) -> bool:
         """Execute one step of the worker's task."""
         try:
+            # Print current messages for debugging
+            await self.send_to_websocket("\n=== Current Messages ===")
+            for msg in self.messages.get_messages_for_api():
+                await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...")
+            await self.send_to_websocket("=== End Messages ===\n")
+
             # Get response from API
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -255,6 +273,10 @@ Instructions:
                     )
                     self.messages.add_message(message)
                     
+                    # Send content to websocket if available
+                    if content:
+                        await self.send_to_websocket(f"Assistant: {content}")
+                    
                     # Process tool calls
                     for tool_call in tool_calls:
                         function_name = tool_call.function.name
@@ -262,6 +284,7 @@ Instructions:
 
                         if not arguments or arguments.strip() == '':
                             error_result = f"Error: Missing arguments for {function_name}"
+                            await self.send_to_websocket(error_result)
                             self.messages.add_tool_response(tool_call.id, error_result, function_name)
                             continue
 
@@ -271,32 +294,29 @@ Instructions:
                                 tool_function = getattr(self, function_name)
                                 args_dict = json.loads(arguments)
                                 result = await tool_function(**args_dict)
+                                await self.send_to_websocket(f"Tool {function_name}: {result}")
                                 self.messages.add_tool_response(tool_call.id, result, function_name)
                             except Exception as e:
                                 error_result = f"Error executing {function_name}: {str(e)}"
+                                await self.send_to_websocket(error_result)
                                 self.messages.add_tool_response(tool_call.id, error_result, function_name)
                         else:
                             error_result = f"Error: Function {function_name} is not available"
+                            await self.send_to_websocket(error_result)
                             self.messages.add_tool_response(tool_call.id, error_result, "error")
                     
                     return True
                 else:
-                    # Print the message and wait for user input when no tool calls
-                    print(f"\nAssistant: {content}")
-                    user_input = input("\nYour response: ")
-                    if user_input.lower() == 'exit':
-                        return False
-                    
-                    # Add both assistant's message and user's response to history
+                    # Send the message to websocket and wait for user input
+                    await self.send_to_websocket(f"\nAssistant: {content}")
                     self.messages.add_assistant_message(content)
-                    self.messages.add_user_text(user_input)
-                    return True
+                    return False  # Stop here and wait for user input
 
             else:
-                print("Empty response from API")
+                await self.send_to_websocket("Empty response from API")
                 return False
 
         except Exception as e:
-            print(f"Error in step: {e}")
+            await self.send_to_websocket(f"Error in step: {e}")
             traceback.print_exc()
             return False
