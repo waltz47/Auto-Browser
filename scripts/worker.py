@@ -225,21 +225,26 @@ Instructions:
         except Exception as e:
             return None, f"Error getting locator: {str(e)}"
 
-    async def send_to_websocket(self, message: str):
+    async def send_to_websocket(self, message: str, debug: bool = False):
         """Send a message to the websocket if available."""
-        if self.websocket:
+        if debug:
+            # Debug messages go to terminal only
+            print(message)
+        elif self.websocket:
+            # Regular messages go to dashboard
             await self.websocket.send_text(message)
         else:
+            # If no websocket, everything goes to terminal
             print(message)
 
     async def step(self) -> bool:
         """Execute one step of the worker's task."""
         try:
-            # Print current messages for debugging
-            await self.send_to_websocket("\n=== Current Messages ===")
+            # Print current messages for debugging (terminal only)
+            await self.send_to_websocket("\n=== Current Messages ===", debug=True)
             for msg in self.messages.get_messages_for_api():
-                await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...")
-            await self.send_to_websocket("=== End Messages ===\n")
+                await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
+            await self.send_to_websocket("=== End Messages ===\n", debug=True)
 
             # Get response from API
             response = await self.client.chat.completions.create(
@@ -275,7 +280,7 @@ Instructions:
                     
                     # Send content to websocket if available
                     if content:
-                        await self.send_to_websocket(f"Assistant: {content}")
+                        await self.send_to_websocket(f"\nAssistant: {content}")
                     
                     # Process tool calls
                     for tool_call in tool_calls:
@@ -284,7 +289,7 @@ Instructions:
 
                         if not arguments or arguments.strip() == '':
                             error_result = f"Error: Missing arguments for {function_name}"
-                            await self.send_to_websocket(error_result)
+                            await self.send_to_websocket(error_result, debug=True)
                             self.messages.add_tool_response(tool_call.id, error_result, function_name)
                             continue
 
@@ -294,15 +299,15 @@ Instructions:
                                 tool_function = getattr(self, function_name)
                                 args_dict = json.loads(arguments)
                                 result = await tool_function(**args_dict)
-                                await self.send_to_websocket(f"Tool {function_name}: {result}")
+                                await self.send_to_websocket(f"Tool {function_name}: {result}", debug=True)
                                 self.messages.add_tool_response(tool_call.id, result, function_name)
                             except Exception as e:
                                 error_result = f"Error executing {function_name}: {str(e)}"
-                                await self.send_to_websocket(error_result)
+                                await self.send_to_websocket(error_result, debug=True)
                                 self.messages.add_tool_response(tool_call.id, error_result, function_name)
                         else:
                             error_result = f"Error: Function {function_name} is not available"
-                            await self.send_to_websocket(error_result)
+                            await self.send_to_websocket(error_result, debug=True)
                             self.messages.add_tool_response(tool_call.id, error_result, "error")
                     
                     return True
@@ -313,10 +318,10 @@ Instructions:
                     return False  # Stop here and wait for user input
 
             else:
-                await self.send_to_websocket("Empty response from API")
+                await self.send_to_websocket("Empty response from API", debug=True)
                 return False
 
         except Exception as e:
-            await self.send_to_websocket(f"Error in step: {e}")
+            await self.send_to_websocket(f"Error in step: {e}", debug=True)
             traceback.print_exc()
             return False

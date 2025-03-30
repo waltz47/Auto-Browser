@@ -1,91 +1,144 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Auto Browser Dashboard</title>
+    <title>Nyx AI Dashboard</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
-            background: #f5f5f5;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .input-container {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            gap: 20px;
         }
-        #userInput {
+        #chat-container {
             flex: 1;
+            min-width: 400px;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+        }
+        #messages {
+            flex-grow: 1;
+            border: 1px solid #ccc;
             padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 16px;
-        }
-        button {
-            padding: 10px 20px;
-            background: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover {
-            background: #45a049;
-        }
-        #output {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 4px;
-            min-height: 200px;
-            max-height: 500px;
+            margin-bottom: 10px;
             overflow-y: auto;
             white-space: pre-wrap;
-            font-family: monospace;
+        }
+        #input-container {
+            display: flex;
+            gap: 10px;
+        }
+        #user-input {
+            flex-grow: 1;
+            padding: 5px;
+        }
+        #browser-view {
+            flex: 1;
+            min-width: 400px;
+            height: 90vh;
+            border: 1px solid #ccc;
+            display: flex;
+            flex-direction: column;
+        }
+        #video-container {
+            flex-grow: 1;
+            background: #f0f0f0;
+            position: relative;
+        }
+        #browser-video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Nyx AI Dashboard</h1>
-        <div class="input-container">
-            <input type="text" id="userInput" placeholder="Enter your task...">
+    <div id="chat-container">
+        <div id="messages"></div>
+        <div id="input-container">
+            <input type="text" id="user-input" placeholder="Enter your task...">
             <button onclick="sendMessage()">Send</button>
         </div>
-        <div id="output"></div>
+    </div>
+    <div id="browser-view">
+        <div id="video-container">
+            <video id="browser-video" autoplay playsinline></video>
+        </div>
     </div>
 
     <script>
-        let ws = new WebSocket(`ws://${window.location.host}/ws`);
-        
-        ws.onmessage = function(event) {
-            const output = document.getElementById('output');
-            output.textContent += event.data + '\n';
-            output.scrollTop = output.scrollHeight;
-        };
+        let ws = null;
+        let pc = null;
+
+        // WebSocket setup
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws`);
+            ws.onmessage = function(event) {
+                const messages = document.getElementById('messages');
+                messages.innerHTML += event.data + '\n';
+                messages.scrollTop = messages.scrollHeight;
+            };
+            ws.onclose = function() {
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        // WebRTC setup
+        async function setupWebRTC() {
+            const video = document.getElementById('browser-video');
+            
+            pc = new RTCPeerConnection({
+                sdpSemantics: 'unified-plan',
+                iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }]
+            });
+
+            // Handle incoming video track
+            pc.ontrack = function(event) {
+                if (event.track.kind === 'video') {
+                    video.srcObject = event.streams[0];
+                }
+            };
+
+            // Create and send offer
+            const offer = await pc.createOffer({
+                offerToReceiveVideo: true
+            });
+            await pc.setLocalDescription(offer);
+
+            const response = await fetch('/offer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    sdp: pc.localDescription.sdp,
+                    type: pc.localDescription.type
+                })
+            });
+
+            const answer = await response.json();
+            await pc.setRemoteDescription(answer);
+        }
 
         function sendMessage() {
-            const input = document.getElementById('userInput');
-            const message = input.value;
-            if (message) {
+            const input = document.getElementById('user-input');
+            const message = input.value.trim();
+            if (message && ws) {
                 ws.send(message);
                 input.value = '';
             }
         }
 
-        document.getElementById('userInput').addEventListener('keypress', function(e) {
+        document.getElementById('user-input').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 sendMessage();
             }
         });
+
+        // Initialize connections
+        connectWebSocket();
+        setupWebRTC();
     </script>
 </body>
 </html> 
