@@ -222,7 +222,6 @@ class Nyx:
             )
             
             self.context = await self.browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},  # Increased viewport size to 1080p
                 screen={"width": 1920, "height": 1080},  # Match screen size with viewport
                 permissions=["geolocation"],

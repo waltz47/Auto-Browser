@@ -39,6 +39,16 @@
             transition: all 0.3s ease;
         }
 
+        #connection-status {
+            padding: 8px 16px;
+            background: #fffbeb; /* Light yellow */
+            color: #b45309; /* Dark yellow */
+            font-size: 14px;
+            text-align: center;
+            border-bottom: 1px solid var(--border-color);
+            display: none; /* Hidden by default */
+        }
+
         #messages {
             flex-grow: 1;
             padding: 10px;
@@ -86,6 +96,7 @@
             background: white;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+            border-top: 1px solid var(--border-color); /* Added border */
         }
 
         #user-input {
@@ -113,11 +124,22 @@
             border-radius: 8px;
             font-size: 16px;
             cursor: pointer;
-            transition: background 0.2s ease;
+            transition: background 0.2s ease, opacity 0.2s ease; /* Added opacity transition */
         }
 
         button:hover {
             background: var(--hover-color);
+        }
+
+        button:disabled { /* Added disabled state */
+            background: #94a3b8; /* Gray background */
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        #user-input:disabled { /* Added disabled state */
+            background: #f1f5f9; /* Lighter gray background */
+            cursor: not-allowed;
         }
 
         #browser-view {
@@ -325,10 +347,11 @@
 </head>
 <body>
     <div id="chat-container">
+        <div id="connection-status">Connecting...</div>
         <div id="messages"></div>
         <div id="input-container">
-            <textarea id="user-input" placeholder="Enter your task... (Shift+Enter for new line)" rows="1"></textarea>
-            <button onclick="sendMessage()">Send</button>
+            <textarea id="user-input" placeholder="Connecting..." rows="1" disabled></textarea>
+            <button id="send-button" onclick="sendMessage()" disabled>Send</button>
         </div>
     </div>
     <div class="resizer" id="resizer"></div>
@@ -359,9 +382,13 @@
         let ws = null;
         let pc = null;
         let isStreaming = false;
+        let isAgentReady = false; // Track if the agent has sent the ready message
         const video = document.getElementById('browser-video');
         const loadingIndicator = document.querySelector('.video-loading');
         const errorIndicator = document.querySelector('.video-error');
+        const statusDiv = document.getElementById('connection-status');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
 
         marked.setOptions({
             highlight: function(code, lang) {
@@ -411,130 +438,215 @@
         // WebSocket setup with reconnection handling
         let wsReconnectAttempts = 0;
         const MAX_RECONNECT_ATTEMPTS = 5;
+        let wsReconnectTimeout = null;
+
+        function updateStatus(message, isError = false) {
+            if (message) {
+                statusDiv.textContent = message;
+                statusDiv.style.backgroundColor = isError ? '#fee2e2' : '#fffbeb'; // Red or Yellow
+                statusDiv.style.color = isError ? '#b91c1c' : '#b45309'; // Dark Red or Dark Yellow
+                statusDiv.style.display = 'block';
+            } else {
+                statusDiv.style.display = 'none';
+            }
+        }
+
+        function disableInput(message = "Connecting...") {
+            userInput.disabled = true;
+            sendButton.disabled = true;
+            userInput.placeholder = message;
+            isAgentReady = false; // Agent is not ready if input is disabled
+        }
+
+        function enableInput() {
+            userInput.disabled = false;
+            sendButton.disabled = false;
+            userInput.placeholder = "Enter your task... (Shift+Enter for new line)";
+            updateStatus(null); // Hide status bar when enabled
+        }
 
         function connectWebSocket() {
-            if (wsReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-                console.log("Max reconnection attempts reached. Please refresh the page.");
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                console.log("WebSocket already open or connecting.");
                 return;
             }
 
+            if (wsReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+                updateStatus(`Connection failed after ${MAX_RECONNECT_ATTEMPTS} attempts. Please refresh the page.`, true);
+                disableInput("Connection failed. Please refresh.");
+                console.log("Max reconnection attempts reached.");
+                clearTimeout(wsReconnectTimeout); // Stop further attempts
+                return;
+            }
+
+            disableInput("Connecting...");
+            updateStatus(`Connecting... (Attempt ${wsReconnectAttempts + 1})`);
+
             try {
                 ws = new WebSocket(`ws://${window.location.host}/ws`);
-                
+
                 ws.onopen = function() {
                     console.log("WebSocket connected");
+                    updateStatus("Connected. Waiting for agent...");
                     wsReconnectAttempts = 0; // Reset attempts on successful connection
-                    
-                    // Reinitialize video stream when WebSocket reconnects
-                    if (!isStreaming || !pc || pc.connectionState !== 'connected') {
-                        console.log("Reinitializing video stream after WebSocket reconnection");
-                        rtcReconnectAttempts = 0;
-                        setupWebRTC();
-                    }
+                    clearTimeout(wsReconnectTimeout); // Clear any pending reconnect timeout
+
+                    // Wait for the agent ready message before enabling input or starting WebRTC
                 };
 
                 ws.onmessage = function(event) {
                     const text = event.data.trim();
-                    
-                    // Check for refresh command
+                    console.log("Raw message received:", text);
+
+                    // Check for refresh command FIRST
                     if (text === "__REFRESH_PAGE__") {
+                        updateStatus("Server requested refresh. Reloading page...", false);
                         console.log("Received refresh command. Reloading page...");
+                        // Clean up before reload
+                        if (pc) pc.close();
+                        if (ws) ws.close();
                         setTimeout(() => window.location.reload(), 1000);
                         return;
                     }
 
-                    // Skip debug messages and empty messages
+                    // Check for agent ready message
+                    if (!isAgentReady && text.includes("Auto Browser is ready. Enter your task below.")) {
+                        console.log("Agent ready message received.");
+                        isAgentReady = true;
+                        enableInput(); // Enable input ONLY when agent is ready
+                        // Now that WS is open and agent is ready, setup WebRTC
+                        rtcReconnectAttempts = 0; // Reset WebRTC attempts as well
+                        setupWebRTC();
+                        // Don't display the initial ready message, input field placeholder handles it
+                        return; // Skip displaying this specific message
+                    }
+
+                    // Skip debug messages and empty messages after initial checks
                     if (!text || !text.trim() || text.includes('===')) {
                         console.log("Skipping debug message or empty message");
                         return;
                     }
 
-                    const messages = document.getElementById('messages');
-                    const messageDiv = document.createElement('div');
-                    messageDiv.className = 'message';
+                    // Process and display other messages only if agent is ready
+                    if (isAgentReady) {
+                        const messages = document.getElementById('messages');
+                        const messageDiv = document.createElement('div');
+                        messageDiv.className = 'message';
 
-                    try {
-                        if (text.includes('\nUser:')) {
-                            console.log("Processing user message");
-                            messageDiv.className += ' user';
-                            messageDiv.textContent = text.replace('\nUser:', '').trim();
-                            messages.appendChild(messageDiv);
-                        } else if (text.includes('\nAuto Browser:')) {
-                            console.log("Processing Auto Browser message");
-                            messageDiv.className += ' assistant markdown-body';
-                            const content = text.replace('\nAuto Browser:', '').trim();
-                            messageDiv.innerHTML = marked.parse(content);
-                            if (hljs) {
-                                hljs.highlightAll();
+                        try {
+                            if (text.startsWith('\nUser:')) {
+                                console.log("Processing user message");
+                                messageDiv.className += ' user';
+                                messageDiv.textContent = text.replace('\nUser:', '').trim();
+                            } else if (text.startsWith('\nAuto Browser:')) {
+                                console.log("Processing Auto Browser message");
+                                messageDiv.className += ' assistant markdown-body';
+                                const content = text.replace('\nAuto Browser:', '').trim();
+                                messageDiv.innerHTML = marked.parse(content);
+                            } else { // Handle generic messages if needed, but style as assistant
+                                console.log("Processing generic message as assistant");
+                                messageDiv.className += ' assistant markdown-body';
+                                messageDiv.innerHTML = marked.parse(text.trim());
                             }
+
                             messages.appendChild(messageDiv);
-                        } else if (!text.includes('__REFRESH_PAGE__')) { // Only process non-refresh messages
-                            console.log("Processing regular message");
-                            messageDiv.className += ' assistant markdown-body';
-                            messageDiv.innerHTML = marked.parse(text.trim());
-                            if (hljs) {
-                                hljs.highlightAll();
+                            // Apply highlighting if needed
+                            if (hljs && messageDiv.className.includes('assistant')) {
+                                messageDiv.querySelectorAll('pre code').forEach((block) => {
+                                    hljs.highlightElement(block);
+                                });
                             }
-                            messages.appendChild(messageDiv);
+
+                            messages.scrollTop = messages.scrollHeight;
+                            console.log("Message processed and added to display");
+                        } catch (error) {
+                            console.error("Error processing message:", error);
                         }
-
-                        messages.scrollTop = messages.scrollHeight;
-                        console.log("Message processed and added to display");
-                    } catch (error) {
-                        console.error("Error processing message:", error);
+                    } else {
+                         console.log("Skipping message because agent is not ready:", text)
                     }
                 };
 
-                ws.onclose = function() {
-                    console.log("WebSocket closed, attempting to reconnect...");
-                    // Clean up existing video stream
+                ws.onclose = function(event) {
+                    console.log("WebSocket closed. Reason:", event.reason, "Code:", event.code);
+                    ws = null;
+                    isAgentReady = false; // Agent is no longer ready
+                    disableInput("Disconnected. Retrying...");
+
+                    // Clean up WebRTC
                     if (pc) {
                         pc.close();
                         pc = null;
                     }
                     isStreaming = false;
                     video.srcObject = null;
-                    ws = null;
+                    browserView.style.display = 'none'; // Hide browser view on disconnect
+                    resizer.style.display = 'none';
+                    document.getElementById('chat-container').style.flex = '1'; // Expand chat
+
+                    // Attempt to reconnect
                     wsReconnectAttempts++;
-                    
-                    // On server restart, force a complete reinitialization
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
+                    const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts -1), 10000); // Exponential backoff up to 10s
+                    updateStatus(`Disconnected. Retrying in ${delay / 1000}s... (Attempt ${wsReconnectAttempts})`, true);
+                    clearTimeout(wsReconnectTimeout); // Clear previous timer if any
+                    wsReconnectTimeout = setTimeout(connectWebSocket, delay);
                 };
 
                 ws.onerror = function(error) {
                     console.error("WebSocket error:", error);
-                    // Clean up video stream on error
-                    if (pc) {
-                        pc.close();
-                        pc = null;
+                    updateStatus("WebSocket error occurred. Check console.", true);
+                    // Don't automatically retry on error, could be a persistent issue
+                    // The onclose event will likely fire next, triggering reconnection logic if appropriate
+                    if (ws) {
+                        // Attempt to close gracefully if possible, might trigger onclose
+                        ws.close();
+                    } else {
+                        // If ws is already null, handle cleanup and schedule reconnect like in onclose
+                        isAgentReady = false;
+                        disableInput("Connection error. Retrying...");
+                        if (pc) { pc.close(); pc = null; }
+                        isStreaming = false;
+                        video.srcObject = null;
+                        browserView.style.display = 'none';
+                        resizer.style.display = 'none';
+                        document.getElementById('chat-container').style.flex = '1';
+
+                        wsReconnectAttempts++;
+                        const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts -1), 10000);
+                        updateStatus(`Connection error. Retrying in ${delay / 1000}s... (Attempt ${wsReconnectAttempts})`, true);
+                        clearTimeout(wsReconnectTimeout);
+                        wsReconnectTimeout = setTimeout(connectWebSocket, delay);
                     }
-                    isStreaming = false;
-                    video.srcObject = null;
-                    
-                    // On server error, force a complete reinitialization
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
+                    ws = null;
                 };
 
-                // Handle page visibility changes
-                document.addEventListener('visibilitychange', function() {
-                    if (document.visibilityState === 'visible') {
-                        // When page becomes visible, check if we need to reinitialize
-                        if (!ws || ws.readyState !== WebSocket.OPEN || !isStreaming) {
-                            console.log("Page visible and stream not active, reloading page...");
-                            window.location.reload();
-                        }
-                    }
-                });
             } catch (error) {
                 console.error("Error creating WebSocket:", error);
+                updateStatus("Failed to initiate connection.", true);
                 wsReconnectAttempts++;
-                setTimeout(connectWebSocket, Math.min(1000 * wsReconnectAttempts, 5000));
+                const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts - 1), 10000);
+                clearTimeout(wsReconnectTimeout);
+                wsReconnectTimeout = setTimeout(connectWebSocket, delay);
             }
         }
+
+        // Handle page visibility changes more gracefully
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'visible') {
+                console.log("Page became visible.");
+                // Check if WebSocket needs reconnection
+                if (!ws || ws.readyState === WebSocket.CLOSED) {
+                    console.log("WebSocket closed while page was hidden. Attempting reconnect.");
+                    // Reset attempts for a fresh start when page becomes visible again
+                    wsReconnectAttempts = 0;
+                    connectWebSocket();
+                } else if (ws && ws.readyState === WebSocket.OPEN && isAgentReady && (!pc || pc.connectionState !== 'connected')) {
+                     console.log("WebSocket open, but WebRTC disconnected. Attempting WebRTC reconnect.");
+                     rtcReconnectAttempts = 0; // Reset RTC attempts too
+                     setupWebRTC();
+                }
+            }
+        });
 
         // Video quality control
         function changeQuality(quality) {
@@ -576,23 +688,33 @@
             errorIndicator.style.display = 'block';
         }
 
-        // WebRTC setup with error handling
+        // WebRTC setup with error handling and coordination with WebSocket
         let rtcReconnectAttempts = 0;
-        const MAX_RTC_RECONNECT_ATTEMPTS = 3;
+        const MAX_RTC_RECONNECT_ATTEMPTS = 5; // Increased attempts for WebRTC
+        let rtcReconnectTimeout = null;
 
         async function setupWebRTC() {
+            // Only proceed if WebSocket is open and agent is ready
+            if (!ws || ws.readyState !== WebSocket.OPEN || !isAgentReady) {
+                console.log("WebRTC setup skipped: WebSocket not ready or agent not ready.");
+                return;
+            }
+
             if (rtcReconnectAttempts >= MAX_RTC_RECONNECT_ATTEMPTS) {
                 console.log("Max WebRTC reconnection attempts reached");
-                browserView.style.display = 'none';
-                resizer.style.display = 'none';
-                document.getElementById('chat-container').style.flex = '1';
+                showError("WebRTC connection failed permanently."); // Show persistent error
+                browserView.style.display = 'block'; // Keep view visible to show error
+                 resizer.style.display = 'block';
+                // Don't hide the browser view, show the error state inside it.
                 return;
             }
 
             showLoading();
+            console.log(`Attempting WebRTC setup (Attempt ${rtcReconnectAttempts + 1})`);
+
             try {
                 if (pc) {
-                    await pc.close();
+                    await pc.close(); // Ensure previous connection is closed
                     pc = null;
                 }
 
@@ -603,23 +725,45 @@
 
                 pc.ontrack = function(event) {
                     if (event.track.kind === 'video') {
+                        console.log("WebRTC video track received");
                         isStreaming = true;
                         browserView.style.display = 'block';
                         resizer.style.display = 'block';
+                         document.getElementById('chat-container').style.flex = `1`; // Adjust layout
+                         browserView.style.flex = `1`; // Adjust layout
                         video.srcObject = event.streams[0];
                         loadingIndicator.style.display = 'none';
+                        errorIndicator.style.display = 'none'; // Hide error on success
                         rtcReconnectAttempts = 0; // Reset attempts on successful connection
+                        clearTimeout(rtcReconnectTimeout); // Clear pending reconnect timeout
                     }
                 };
 
                 pc.onconnectionstatechange = function() {
                     console.log("WebRTC state:", pc.connectionState);
-                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-                        showError();
-                        rtcReconnectAttempts++;
-                        setTimeout(() => {
-                            setupWebRTC();
-                        }, Math.min(1000 * rtcReconnectAttempts, 5000));
+                    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+                        isStreaming = false; // Stop streaming state
+                         video.srcObject = null; // Clear video source
+
+                        // Don't hide the view, show error state
+                        if (pc.connectionState !== 'closed') { // Avoid retry if explicitly closed
+                             showError();
+                             rtcReconnectAttempts++;
+                             const delay = Math.min(1000 * Math.pow(2, rtcReconnectAttempts - 1), 10000); // Exponential backoff
+                             console.log(`WebRTC disconnected/failed. Retrying in ${delay / 1000}s...`);
+                             clearTimeout(rtcReconnectTimeout);
+                             rtcReconnectTimeout = setTimeout(setupWebRTC, delay);
+                         } else {
+                             showError("Stream closed."); // Indicate it was closed
+                         }
+                    } else if (pc.connectionState === 'connected') {
+                        // Ensure loading/error indicators are hidden on connect
+                        loadingIndicator.style.display = 'none';
+                        errorIndicator.style.display = 'none';
+                         rtcReconnectAttempts = 0; // Reset on connect
+                         clearTimeout(rtcReconnectTimeout);
+                    } else if (pc.connectionState === 'connecting') {
+                         showLoading(); // Show loading during connection attempt
                     }
                 };
 
@@ -627,6 +771,11 @@
                     offerToReceiveVideo: true
                 });
                 await pc.setLocalDescription(offer);
+
+                // Send offer only if WebSocket is still open
+                 if (!ws || ws.readyState !== WebSocket.OPEN) {
+                     throw new Error("WebSocket closed before sending WebRTC offer.");
+                 }
 
                 const response = await fetch('/offer', {
                     method: 'POST',
@@ -640,18 +789,31 @@
                 });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    throw new Error(`HTTP error fetching WebRTC answer! status: ${response.status}`);
                 }
 
                 const answer = await response.json();
+                 // Set remote description only if WebSocket is still open and PC exists
+                 if (!ws || ws.readyState !== WebSocket.OPEN || !pc || pc.signalingState === 'closed') {
+                     throw new Error("WebSocket closed or PC closed before setting WebRTC remote description.");
+                 }
                 await pc.setRemoteDescription(answer);
+                console.log("WebRTC offer/answer exchange successful.");
+
             } catch (error) {
                 console.error('WebRTC setup failed:', error);
-                showError();
+                showError(); // Show error state in video area
+                 isStreaming = false;
+                 if (pc) {
+                     pc.close(); // Attempt cleanup
+                     pc = null;
+                 }
+                // Retry logic
                 rtcReconnectAttempts++;
-                setTimeout(() => {
-                    setupWebRTC();
-                }, Math.min(1000 * rtcReconnectAttempts, 5000));
+                const delay = Math.min(1000 * Math.pow(2, rtcReconnectAttempts - 1), 10000); // Exponential backoff
+                 console.log(`WebRTC setup failed. Retrying in ${delay / 1000}s...`);
+                clearTimeout(rtcReconnectTimeout);
+                rtcReconnectTimeout = setTimeout(setupWebRTC, delay);
             }
         }
 
@@ -674,31 +836,26 @@
         function sendMessage() {
             const message = textarea.value.trim();
             if (message) {
-                if (ws && ws.readyState === WebSocket.OPEN) {
+                // Double check WebSocket state and agent readiness before sending
+                if (ws && ws.readyState === WebSocket.OPEN && isAgentReady) {
                     try {
                         ws.send(message);
-                        textarea.value = '';
-                        textarea.style.height = 'auto';
+                        textarea.value = ''; // Clear input after sending
+                        textarea.style.height = 'auto'; // Reset height
                     } catch (error) {
                         console.error("Error sending message:", error);
-                        // Try to reconnect if send fails
-                        ws = null;
-                        connectWebSocket();
+                        updateStatus("Failed to send message. Check connection.", true);
+                        // Attempt to handle connection issue, might trigger reconnect via error/close events
+                        if (ws) ws.close(); // Force close to trigger reconnect logic
                     }
                 } else {
-                    console.log("WebSocket not connected, attempting to reconnect...");
-                    ws = null;
-                    connectWebSocket();
-                    // Store message to send after reconnection
-                    setTimeout(() => {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(message);
-                            textarea.value = '';
-                            textarea.style.height = 'auto';
-                        } else {
-                            console.error("Failed to send message: WebSocket not connected");
-                        }
-                    }, 1000);
+                    console.log("Cannot send message: WebSocket not open or agent not ready.");
+                    updateStatus("Cannot send message. Connection not ready.", true);
+                    // Optionally, attempt to reconnect if WS is closed
+                    if (!ws || ws.readyState === WebSocket.CLOSED) {
+                         wsReconnectAttempts = 0; // Reset attempts for manual trigger
+                         connectWebSocket();
+                    }
                 }
             }
         }
@@ -711,16 +868,15 @@
         });
 
         // Initialize
-        connectWebSocket();
-        setupWebRTC().then(() => {
-            setTimeout(() => {
-                if (!isStreaming) {
-                    browserView.style.display = 'none';
-                    resizer.style.display = 'none';
-                    document.getElementById('chat-container').style.flex = '1';
-                }
-            }, 2000);
-        });
+        updateStatus("Initializing..."); // Initial status
+        connectWebSocket(); // Start WebSocket connection first
+
+        // Initial layout adjustment (chat takes full width until video is ready)
+        document.getElementById('chat-container').style.flex = '1';
+        browserView.style.display = 'none';
+        resizer.style.display = 'none';
+
+        // No initial WebRTC setup call here, it's triggered after WS connect and agent ready message
     </script>
 </body>
 </html> 

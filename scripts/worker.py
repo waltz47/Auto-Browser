@@ -124,15 +124,59 @@ Instructions:
             return False
 
     async def move_to_url(self, url: str) -> str:
-        """Navigate to a URL and return page contents."""
-        try:
-            await self.page.goto(url, wait_until="domcontentloaded")
-            await asyncio.sleep(2)
-            print(f"Navigated to: {url}")
-            self.element_cache.clear()
-            return f"Navigated to {url}. Contents: {await self.get_url_contents()}"
-        except Exception as e:
-            return f"Error navigating to URL: {str(e)}"
+        """Navigate to a URL with retry logic and error handling."""
+        max_retries = 3
+        retry_count = 0
+        last_error = None
+
+        while retry_count < max_retries:
+            try:
+                # Try different navigation options based on retry count
+                if retry_count == 0:
+                    # First attempt: Standard navigation with longer timeout
+                    await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                elif retry_count == 1:
+                    # Second attempt: Force HTTP1.1 and clear cache/cookies
+                    await self.page.context.clear_cookies()
+                    await self.page.route("**/*", lambda route: route.continue_(
+                        headers={"Accept": "*/*", "Upgrade-Insecure-Requests": "1", "Connection": "keep-alive"}
+                    ))
+                    await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                else:
+                    # Final attempt: Network conditions and different wait strategy
+                    await self.page.context.clear_cookies()
+                    await self.page.set_extra_http_headers({"Accept-Encoding": "gzip, deflate"})
+                    await self.page.goto(url, wait_until="load", timeout=60000)
+
+                # Wait for network to be idle and add small delay
+                try:
+                    await self.page.wait_for_load_state("networkidle", timeout=5000)
+                except:
+                    pass  # Don't fail if networkidle times out
+                
+                await asyncio.sleep(2)
+                print(f"Successfully navigated to: {url} (attempt {retry_count + 1})")
+                self.element_cache.clear()
+                return f"Navigated to {url}. Contents: {await self.get_url_contents()}"
+
+            except Exception as e:
+                last_error = str(e)
+                retry_count += 1
+                if retry_count < max_retries:
+                    # Exponential backoff
+                    wait_time = 2 ** retry_count
+                    print(f"Navigation attempt {retry_count} failed. Retrying in {wait_time} seconds...")
+                    await asyncio.sleep(wait_time)
+                    # Clear any error states
+                    try:
+                        await self.page.reload()
+                    except:
+                        pass
+
+        # If all retries failed, return detailed error
+        error_msg = f"Failed to navigate to URL after {max_retries} attempts. Last error: {last_error}"
+        print(error_msg)
+        return f"Error navigating to URL: {error_msg}"
 
     async def get_url_contents(self) -> str:
         """Retrieve and cache the current page's contents."""
