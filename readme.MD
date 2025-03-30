@@ -23,12 +23,6 @@ Posting on linkedin:
     <img src="docs/clips/lnkdin.gif" width="600" alt="Managing Linkedin">
 </div>
 
-Multiple agents in parallel via dashboard:
-
-<div align="center">
-    <img src="docs/clips/dashboard.gif" width="600" alt="Nyx Ai dashboard">
-</div>
-
 
 ## Installation
 
@@ -56,10 +50,10 @@ Multiple agents in parallel via dashboard:
 
 1. Start the AI worker:
     ```sh
-    python run.py
+    python run.py --mode dashbaord
     ```
 
-2. Enter the prompt in the terminal. (For eg: Perform all tasks outlined in input/tasks.csv)
+2. Enter the prompt in the browser.
 
 3. To change the AI behavior or to add specific details, you can add a custom prompt in `scripts/custom.log`
 
