@@ -31,6 +31,10 @@ class Worker:
         self.messages = self._init_message_history()
         self.websocket = websocket  # Add websocket support
         self.enable_vision = enable_vision  # Store vision flag
+        self.planner = None  # Will be initialized in setup_client
+        self.current_steps = []  # Store the current task steps
+        self.current_step_index = 0  # Track the current step being executed
+        self.first_step_over = False
 
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
@@ -88,11 +92,36 @@ Instructions:
                 self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
             else:
                 raise ValueError(f"Unsupported API type: {self.api}")
+
+            # Initialize the planner
+            from planner import Planner
+            self.planner = Planner(self.api, self.model)
+            await self.planner.setup_client()
                 
             print("API client initialized successfully")
         except Exception as e:
             print(f"Failed to initialize API client: {str(e)}")
             raise
+
+    async def process_user_input(self, user_input: str):
+        """Process user input by first planning then executing."""
+        try:
+            # Get the plan
+            plan = await self.planner.plan_task(user_input)
+            
+            # Send the plan to the user
+            if plan:
+                await self.send_to_websocket(f"\nAuto Browser: I'll help you with that. Here's what I'm going to do:\n{plan[0]}\n")
+                
+                # Add the plan to message history
+                self.messages.add_user_text(plan[0])
+                
+            return True
+            
+        except Exception as e:
+            error_msg = f"Error processing user input: {str(e)}"
+            await self.send_to_websocket(error_msg)
+            return False
 
     async def move_to_url(self, url: str) -> str:
         """Navigate to a URL and return page contents."""
@@ -243,20 +272,37 @@ Instructions:
             print(message)
 
     async def step(self) -> bool:
-        """Execute one step of the worker's task."""
+        """Execute the task using the existing message processing logic."""
+        try:
+            # Execute the step using the existing logic
+            active = await self._execute_step("")
+
+            if not active:
+                await self.send_to_websocket("\nAuto Browser: Task completed! Let me know if you need anything else.")
+                return False
+
+            return active
+
+        except Exception as e:
+            await self.send_to_websocket(f"Error in step: {e}", debug=True)
+            traceback.print_exc()
+            return False
+
+    async def _execute_step(self, step: str) -> bool:
+        """Execute a single step using the existing message processing logic."""
         try:
             # Print current messages for debugging (terminal only)
             await self.send_to_websocket("\n=== Current Messages ===", debug=True)
             for msg in self.messages.get_messages_for_api():
-                # Skip printing image content
                 if msg.get('role') == 'user' and 'content' in msg and isinstance(msg['content'], list):
                     await self.send_to_websocket(f"[{msg['role']}]: [Image data omitted]", debug=True)
                 else:
                     await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
             await self.send_to_websocket("=== End Messages ===\n", debug=True)
 
+            self.first_step_over = False
             # Capture screenshot if page exists and vision is enabled
-            if self.page and self.enable_vision:
+            if self.page and self.enable_vision and self.first_step_over:
                 try:
                     screenshot = await self.page.screenshot(type='jpeg', quality=80)
                     if screenshot:
@@ -269,7 +315,7 @@ Instructions:
                         await self.send_to_websocket("Added screenshot to API call", debug=True)
                 except Exception as e:
                     await self.send_to_websocket(f"Error capturing screenshot: {e}", debug=True)
-
+            self.first_step_over = True
             # Get response from API
             response = await self.client.chat.completions.create(
                 model=self.model,

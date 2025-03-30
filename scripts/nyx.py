@@ -168,15 +168,15 @@ class Nyx:
                             await websocket.send_text(f"\nUser: {data}\n")
                             print(f"\n=== User Input ===\n{data}")
                             
-                            # Add user input to message history
-                            worker.messages.add_user_text(data)
-                            
-                            # Process the task - continue until we need user input
-                            while True:
-                                active = await worker.step()
-                                if not active:
-                                    print("\n=== Ready for Next Input ===")
-                                    break
+                            # Process the task with planning
+                            active = await worker.process_user_input(data)
+                            if active:
+                                # Process the planned steps
+                                while True:
+                                    active = await worker.step()
+                                    if not active:
+                                        print("\n=== Ready for Next Input ===")
+                                        break
 
                         except RuntimeError as e:
                             if "Connection closed" in str(e):
@@ -358,15 +358,15 @@ class Nyx:
                         await websocket.send_text(f"\nUser: {data}\n")
                         print(f"\n=== User Input ===\n{data}")
                         
-                        # Add user input to message history
-                        worker.messages.add_user_text(data)
-                        
-                        # Process the task - continue until we need user input
-                        while True:
-                            active = await worker.step()
-                            if not active:
-                                print("\n=== Ready for Next Input ===")
-                                break
+                        # Process the task with planning
+                        active = await worker.process_user_input(data)
+                        if active:
+                            # Process the planned steps
+                            while True:
+                                active = await worker.step()
+                                if not active:
+                                    print("\n=== Ready for Next Input ===")
+                                    break
 
                     except RuntimeError as e:
                         if "Connection closed" in str(e):
