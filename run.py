@@ -1,115 +1,104 @@
+import os
 import sys
 import asyncio
-import argparse
-import pandas as pd
-from threading import Thread
-import time
-import traceback
-import os
+from playwright.async_api import async_playwright
+import json
 
-sys.path.append("scripts")
-sys.path.append("scripts/web")
-sys.path.append("scripts/dashboard")
+# Add scripts directory to Python path
+sys.path.append(os.path.join(os.path.dirname(__file__), 'scripts'))
+from worker import Worker
 
-try:
-    from nyx import Nyx
-    print("Imported Nyx successfully")
-    from dashboard import DashboardNyx, init_dashboard, app, socketio
-    print("Imported DashboardNyx, app, and socketio successfully")
-except ImportError as e:
-    print(f"Import error: {e}")
-    traceback.print_exc()
-    sys.exit(1)
+async def main():
+    # Load configuration
+    with open("api_config.cfg", 'r') as f:
+        cfg = f.read()
 
-def start_dashboard(host='0.0.0.0', port=5000):
-    """Start the dashboard server."""
-    try:
-        print(f"Starting dashboard server at http://{host}:{port}")
-        print(f"Open http://localhost:{port} in your browser to view the dashboard")
-        socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True, debug=False)
-    except Exception as e:
-        print(f"Error starting dashboard server: {e}")
-        traceback.print_exc()
+    config = {}
+    for line in cfg.split('\n'):
+        if '=' in line:
+            key, value = line.split('=', 1)
+            config[key.strip()] = value.strip().strip('"')
 
-async def run_nyx(nyx_instance, initial_input):
-    """Run Nyx with the given input."""
-    try:
-        print(f"Handling initial input: {initial_input}")
-        await nyx_instance.handle_initial_input(initial_input)
-        print("Starting Nyx")
-        await nyx_instance.start()
-    except Exception as e:
-        print(f"Error in Nyx execution: {e}")
-        traceback.print_exc()
-        raise
+    # Determine API type
+    if os.environ.get("OPENAI_API_KEY") is not None:
+        api = "openai"
+        model = config["openai_model"]
+    elif os.environ.get("XAI_API_KEY") is not None:
+        api = "xai"
+        model = config["xai_model"]
+    else:
+        api = "ollama"
+        model = config["ollama_local_model"]
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Run Nyx or Nyx with Dashboard")
-    parser.add_argument("--dashboard", action="store_true", help="Run with dashboard enabled")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    args = parser.parse_args()
+    # Load tools
+    with open("tools.json", 'r') as f:
+        tools = json.load(f)["tools"]
 
-    # Set up debug mode if requested
-    if args.debug:
-        print("Debug mode enabled")
-        os.environ["DEBUG"] = "1"
+    # Initialize playwright
+    async with async_playwright() as playwright:
+        # Launch browser in a new window
+        browser = await playwright.chromium.launch(
+            headless=False,
+            args=[
+                "--new-window",
+                "--ignore-certificate-errors",
+                "--disable-extensions",
+                "--disable-blink-features=AutomationControlled",
+            ]
+        )
 
-    try:
-        initial_input = input("Enter input: ")
-        if not initial_input.strip():
-            print("Error: No input provided")
-            sys.exit(1)
+        # Create context and page
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36",
+            viewport=None,
+            permissions=["geolocation"],
+        )
+        page = await context.new_page()
 
-        if args.dashboard:
-            print("=== Starting Nyx with Dashboard ===")
-            
-            # Create Nyx instance first
-            print("Initializing Nyx")
-            nyx = Nyx()
-            
-            # Initialize the dashboard with the Nyx instance
-            print("Initializing DashboardNyx")
-            dashboard = init_dashboard(nyx)
-            
-            # Start the dashboard components
-            print("Starting dashboard components")
-            dashboard.start()
-            
-            # Start the dashboard server in a separate thread
-            print("Starting dashboard server thread")
-            dashboard_thread = Thread(target=start_dashboard)
-            dashboard_thread.daemon = True
-            dashboard_thread.start()
-            
-            # Give the server time to start
-            print("Waiting for server to start...")
-            time.sleep(2)
-            
-            if not dashboard_thread.is_alive():
-                print("Dashboard thread failed to start or crashed")
-                sys.exit(1)
-            print("Dashboard server is running. Open http://localhost:5000 in your browser")
-            
-            # Handle the input through the dashboard
-            print(f"Sending input to dashboard: {initial_input}")
-            dashboard.handle_input(initial_input)
-            
-            # Keep the main thread running
+        # Create worker
+        worker = Worker(
+            page=page,
+            worker_id=0,
+            request_queue=None,  # No queue needed
+            api=api,
+            model=model,
+            max_messages=100,
+            tools=tools
+        )
+
+        # Initialize API client
+        await worker.setup_client()
+
+        print("\nWorker initialized and ready!")
+        print("Enter your task or type 'exit' to quit")
+
+        # Main input loop
+        while True:
             try:
-                print("Main thread waiting for dashboard to complete...")
-                while dashboard_thread.is_alive():
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                print("\nShutting down...")
-                dashboard.running = False
-                time.sleep(2)  # Give time for cleanup
-                sys.exit(0)
-        else:
-            print("=== Starting Regular Nyx ===")
-            nyx = Nyx()
-            asyncio.run(run_nyx(nyx, initial_input))
+                user_input = input("\nEnter task: ")
+                if user_input.lower() == 'exit':
+                    break
 
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+                # Set task and process
+                worker.current_task = user_input
+                worker.waiting_for_input = False
+                worker.messages.add_user_text(user_input)  # Add user input to message history
+                
+                # Process task
+                while True:
+                    active = await worker.step()
+                    if not active or worker.waiting_for_input:
+                        break
+
+            except KeyboardInterrupt:
+                print("\nExiting...")
+                break
+            except Exception as e:
+                print(f"Error: {e}")
+                continue
+
+        # Cleanup
+        await browser.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
