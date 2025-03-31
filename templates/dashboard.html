@@ -418,19 +418,16 @@
         <!-- Add progress container -->
         <div id="progress-container">
             <div class="progress-header">
-                <div class="progress-title">Workflow Progress</div>
+                <div class="progress-title">Task Progress</div>
                 <div class="progress-stats">
-                    Point <span id="current-point">0</span>/<span id="total-points">0</span>
+                    Task <span id="current-task">0</span>/<span id="total-tasks">0</span>
                 </div>
             </div>
             <div class="progress-bar">
                 <div class="progress-fill"></div>
             </div>
-            <div class="progress-details">
-                Task <span id="current-task">0</span>/<span id="total-tasks">0</span>
-            </div>
             <div class="current-task">
-                <div class="current-task-title" id="current-point-title">Not started</div>
+                <div class="current-task-title" id="current-task-title">Not started</div>
                 <div class="current-task-description" id="current-task-description">Waiting to begin...</div>
             </div>
         </div>
@@ -985,22 +982,29 @@
 
         // Add progress update handler
         function updateProgress(progress) {
+            console.log("Updating progress:", progress); // Debug log
             const progressContainer = document.getElementById('progress-container');
             const progressFill = document.querySelector('.progress-fill');
             
             // Show progress container
             progressContainer.style.display = 'block';
             
-            // Update progress bar and stats
-            document.getElementById('current-point').textContent = progress.current_point;
-            document.getElementById('total-points').textContent = progress.total_points;
-            document.getElementById('current-task').textContent = progress.current_task;
-            document.getElementById('total-tasks').textContent = progress.total_tasks;
-            document.getElementById('current-point-title').textContent = progress.current_point_title;
-            document.getElementById('current-task-description').textContent = progress.current_task_description;
+            // Parse values from progress data
+            const currentTask = parseInt(progress.current_task) || 1; // Already one-based from worker
+            const totalTasks = parseInt(progress.total_tasks) || 1;
+            const overallProgress = parseInt(progress.overall_progress) || 0; // Based on completed tasks
             
-            // Update progress bar
-            progressFill.style.width = `${progress.overall_progress}%`;
+            // Update progress bar and stats
+            document.getElementById('current-task').textContent = currentTask;
+            document.getElementById('total-tasks').textContent = totalTasks;
+            document.getElementById('current-task-title').textContent = progress.current_task_title || 'Current Task';
+            document.getElementById('current-task-description').textContent = progress.current_task_description || '';
+            
+            // Update progress bar with animation - progress is now based on completed tasks
+            progressFill.style.transition = 'width 0.3s ease';
+            progressFill.style.width = `${overallProgress}%`;
+            
+            console.log("Progress bar width set to:", `${overallProgress}%`); // Debug log
         }
     </script>
 </body>

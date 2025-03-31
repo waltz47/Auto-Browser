@@ -159,7 +159,7 @@ async def test_selectors_on_page(page: Page, enhanced_json: Dict[str, Any]) -> D
                     # Short timeout for waiting
                     element = await page.wait_for_selector(
                         f"xpath={elem['xpath_selector']}", 
-                        timeout=1000,  # 1 second timeout
+                        timeout=100,  # 0.1 second timeout
                         state="attached"
                     )
                     elem['test_result'] = {
@@ -232,32 +232,3 @@ async def process(worker, json_string):
             results["elements_by_type"] = json.loads(json_string)['elements_by_type']
             open(f"log/cleaned_{worker.worker_id}.log", "w", encoding="utf-8").write(str(json.dumps(results, indent=2)))
             return str(json.dumps(results, indent=2))
-
-# Example usage:
-"""
-# First enhance the JSON with selectors
-json_string = '''
-{
-    "inputs": [...],
-    "buttons": [...],
-    "links": [...]
-}
-'''
-
-import asyncio
-from playwright.async_api import async_playwright
-
-async def main():
-    async with async_playwright() as p:
-        browser = await p.chromium.launch()
-        page = await browser.new_page()
-        # Assuming page is already navigated to the target URL
-        enhanced_json = await enhance_json_with_selectors(page, json_string)
-        results = await test_selectors_on_page(page, enhanced_json)
-        
-        # Print or process results
-        print(json.dumps(results, indent=2))
-        await browser.close()
-
-asyncio.run(main())
-"""

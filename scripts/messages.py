@@ -189,28 +189,24 @@ class MessageHistory:
         return self.get_messages_for_api()
         
     def trim_history(self, max_messages: int) -> None:
-        """Trim message history to keep only recent messages if exceeding max length,
-        preserving only the last occurrence of special JSON markers."""
-        import re
+        """Trim message history to keep only the most recent page JSON content,
+        replacing older ones with a placeholder to save memory."""
         
         # Find all messages containing JSON markers
         json_messages = []
         for i, msg in enumerate(self.messages):
-            if isinstance(msg.content, str) and "PAGE JSON" in msg.content:
+            if isinstance(msg.content, str) and "***PAGE JSON***" in msg.content:
                 json_messages.append(i)
         
-        # Replace content in all but the last 2 occurrences
-        if len(json_messages) > 4:
-            for i in json_messages[:-4]:
-                print("Converting to Stale")
-                self.messages[i].content = "Stale page summary"
+        # If we have more than one page JSON, replace all but the most recent with a placeholder
+        if len(json_messages) > 1:
+            for i in json_messages[:-1]:  # Keep only the last JSON content
+                self.messages[i].content = "<Previous page JSON content removed to save memory>"
 
         # Truncate history if it exceeds max_messages
-        if len(self.messages) > max_messages + 2:
+        if len(self.messages) > max_messages:
             # Keep system message (index 0) and last max_messages
             self.messages = [self.messages[0]] + self.messages[-max_messages:]
-
-        # print(self.messages)
 
             
     def __len__(self) -> int:

@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 from typing import Dict, Any, Union
 from pathlib import Path
 import traceback
+import base64
 
 # Import web tools and messages
 from web.web import get_page_elements, get_main_content
@@ -79,6 +80,16 @@ Remember:
 - Only mark tasks as failed after exhausting all options
 - Maintain task state across multiple tool calls
 
+### Task Completion Detection
+CRITICAL: Before executing any actions for the current task:
+1. Review the conversation history thoroughly
+2. Check if the current task's objective has already been achieved in previous steps
+3. If you find evidence that the current task's goal was already met:
+   - Call mark_task_complete immediately with the current task_id
+   - Include a brief explanation referencing when/how it was previously completed
+4. Only proceed with new actions if you're certain the task hasn't been completed yet
+5. When in doubt about completion, check the actual state rather than assuming
+
 ### Information Processing
 - Research and data gathering through web searches
 - Information verification from multiple sources
@@ -139,9 +150,9 @@ Instructions:
             
             # Send initial workflow info to user
             workflow_msg = f"\nAuto Browser: Created workflow: {self.current_workflow.title}\n"
-            for i, point in enumerate(self.current_workflow.points, 1):
-                workflow_msg += f"\n{i}. {point.title}\n"
-                workflow_msg += f"   Description: {point.description}\n"
+            for i, task in enumerate(self.current_workflow.tasks, 1):
+                workflow_msg += f"\n{i}. {task.title}\n"
+                workflow_msg += f"   Description: {task.description}\n"
             
             await self.send_to_websocket(workflow_msg)
             
@@ -162,72 +173,84 @@ Instructions:
             # Get current task details
             current_task = self.orchestrator.get_current_task()
             
-            # Only stop if there are no more tasks AND we're at the end of all points
+            # Stop if there are no more tasks
             if not current_task:
-                if self.current_workflow.current_point_index >= len(self.current_workflow.points):
-                    await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
-                    return False
-                else:
-                    # We still have more points to process
-                    print("[Worker] Moving to next point's tasks")
-                    return True
+                await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
+                return False
 
-            # Update progress
-            await self.send_progress_update(current_task["progress"])
+            # Update progress - ensure we handle websocket errors gracefully
+            try:
+                await self.send_progress_update(current_task["progress"])
+            except Exception as e:
+                print(f"Error sending progress update: {e}")
+                # Continue execution even if progress update fails
 
             # Print current task info
             print(f"[Worker] Executing task: {current_task['task']}")
-            print(f"[Worker] Point: {current_task['progress']['current_point_title']}")
+            print(f"[Worker] Task: {current_task['task_title']}")
             print(f"[Worker] Task index: {current_task['progress']['current_task']}/{current_task['progress']['total_tasks']}")
 
             # Execute the task
             active = await self._execute_step(current_task)
             print(f"[Worker] Task execution result - active: {active}")
 
-            # Always return True unless explicitly waiting for input or workflow complete
-            # This ensures we continue processing tasks across points
             return True
 
         except Exception as e:
             error_details = traceback.format_exc()
             print(f"[Worker Error] Caught exception in step: {e}\nDetails: {error_details}")
-            await self.send_to_websocket(f"Error in step: {e}", debug=True)
+            
+            # Try to send error message, but don't fail if websocket is closed
+            try:
+                await self.send_to_websocket(f"Error in step: {e}", debug=True)
+            except Exception as ws_error:
+                print(f"Could not send error to websocket: {ws_error}")
             
             # Ask orchestrator for help
-            context = {
-                "current_point": self.current_workflow.points[self.current_workflow.current_point_index].title,
-                "current_task": current_task["task"] if current_task else "Unknown",
-                "error_message": str(e),
-                "traceback": error_details
-            }
-            print(f"[Worker Error] Asking orchestrator for help with context: {context}")
-            
-            help_response = await self.orchestrator.handle_worker_request(
-                f"Error occurred: {str(e)}. Need guidance on how to proceed.",
-                context
-            )
-            print(f"[Worker Error] Received help response from orchestrator: '{help_response}'")
-            
-            if help_response.startswith("USER_INPUT_REQUIRED:"):
-                print("[Worker Error] Orchestrator requested user input.")
-                user_prompt = help_response[len("USER_INPUT_REQUIRED:"):].strip()
-                await self.send_to_websocket(f"\nAuto Browser: {user_prompt}")
-                print(f"[Worker Error] Sent prompt to user: '{user_prompt}'")
-                self.waiting_for_input = True
-                print("[Worker Error] Set waiting_for_input = True")
-                return False
-            else:
-                print("[Worker Error] Orchestrator provided guidance. Adding to messages and retrying.")
-                self.messages.add_assistant_text(help_response)
-                return True
+            try:
+                context = {
+                    "current_task": str(current_task["task"]) if current_task else "Unknown",
+                    "error_message": str(e),
+                    "traceback": error_details
+                }
+                
+                help_response = await self.orchestrator.handle_worker_request(
+                    f"Error occurred: {str(e)}. Need guidance on how to proceed.",
+                    context
+                )
+                
+                if help_response.startswith("USER_INPUT_REQUIRED:"):
+                    user_prompt = help_response[len("USER_INPUT_REQUIRED:"):].strip()
+                    try:
+                        await self.send_to_websocket(f"\nAuto Browser: {user_prompt}")
+                    except Exception:
+                        print(f"Could not send prompt to websocket: {user_prompt}")
+                    self.waiting_for_input = True
+                    return False
+                else:
+                    self.messages.add_assistant_text(help_response)
+                    return True
+                    
+            except Exception as help_error:
+                print(f"Error getting help from orchestrator: {help_error}")
+                return False  # Stop processing on critical error
 
     async def send_progress_update(self, progress: Dict[str, Any]):
         """Send progress update to the dashboard."""
         if self.websocket:
             try:
+                # Create a copy of the progress dict to avoid modifying the original
+                display_progress = progress.copy()
+                
+                # Convert to one-based task index for display only
+                display_progress['current_task'] = int(progress.get('current_task', 0)) + 1
+                
+                # Keep the original progress percentage which is based on completed tasks
+                display_progress['overall_progress'] = int(progress.get('overall_progress', 0))
+                
                 progress_msg = {
                     "type": "progress_update",
-                    "data": progress
+                    "data": display_progress
                 }
                 await self.websocket.send_text(json.dumps(progress_msg))
             except Exception as e:
@@ -238,6 +261,11 @@ Instructions:
         max_retries = 3
         retry_count = 0
         last_error = None
+        self.first_step_over = True
+
+        # Clean up message history before navigating to new URL
+        self.messages.trim_history(self.max_messages)
+        self.element_cache.clear()
 
         while retry_count < max_retries:
             try:
@@ -266,8 +294,11 @@ Instructions:
                 
                 await asyncio.sleep(2)
                 print(f"Successfully navigated to: {url} (attempt {retry_count + 1})")
-                self.element_cache.clear()
-                return f"Navigated to {url}. Contents: {await self.get_url_contents()}"
+                
+                # Get new page contents
+                contents = await self.get_url_contents()
+                self.element_cache[self.page.url] = contents
+                return f"Navigated to {url}. Contents: {contents}"
 
             except Exception as e:
                 last_error = str(e)
@@ -295,20 +326,39 @@ Instructions:
             return self.element_cache[cache_key]
         
         try:
-            await asyncio.sleep(4)
-            await self.page.wait_for_load_state(state="domcontentloaded")
-            content = await self.page.content()
+            # Wait for page to be ready
+            await self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+            await asyncio.sleep(2)  # Give time for dynamic content
             
-            elements = await get_page_elements(self.page)
-            elements_info = await process(self, elements)
-            main_content = await get_main_content(self.page)
-            data = f"***PAGE JSON***\n\n{elements_info}\n\n{main_content}\n\n ***END OF PAGE JSON***"
+            try:
+                # Try to wait for network to be idle, but don't fail if it times out
+                await self.page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception as e:
+                print(f"Warning: Network not idle, continuing anyway: {e}")
             
-            self.element_cache[cache_key] = data
-            return data
+            try:
+                # Get page elements and process them into JSON
+                elements = await get_page_elements(self.page)
+                elements_info = await process(self, elements)
+                
+                # Cache and return only the JSON data
+                self.element_cache[cache_key] = elements_info
+                return elements_info
+                
+            except Exception as e:
+                print(f"Warning: Could not get page elements: {e}")
+                return json.dumps({
+                    "error": "Could not extract page elements",
+                    "details": str(e)
+                })
+            
         except Exception as e:
-            print(f"Error getting page contents: {e}")
-            return "Error retrieving page contents"
+            error_msg = f"Error getting page contents: {str(e)}"
+            print(error_msg)
+            return json.dumps({
+                "error": "Error retrieving page contents",
+                "details": str(e)
+            })
 
     async def send_keys_to_element(self, xpathSelector: str, keys: str) -> str:
         """Send keys to an element identified by xpath."""
@@ -346,10 +396,29 @@ Instructions:
         if error:
             return error
         try:
-            await locator.scroll_into_view_if_needed(timeout=2000)
+            # Wait for element to be present and visible
+            await self.page.wait_for_selector(f"xpath={xpathSelector}", 
+                state="visible", 
+                timeout=10000
+            )
+            
+            # Ensure page is loaded
+            await self.page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(2)  # Give dynamic content time to load
+            
+            # Try to scroll element into view
+            try:
+                await locator.scroll_into_view_if_needed(timeout=5000)
+            except Exception as e:
+                print(f"Warning: Could not scroll to element: {e}")
+            
+            # Highlight the element we're trying to click
             await self.highlight_element(xpathSelector)
-            await locator.click(force=True)
-            await asyncio.sleep(3)
+            
+            # Click with force if needed
+            await locator.click(force=True, timeout=5000)
+            await asyncio.sleep(3)  # Wait for any navigation/changes
+            
             return f"Element clicked. Contents: {await self.get_url_contents()}"
         except Exception as e:
             return f"Error clicking element: {str(e)}"
@@ -429,132 +498,124 @@ Instructions:
 
     async def get_current_task(self) -> str:
         """Get information about the current task."""
-        if not self.current_workflow:
-            return json.dumps({"error": "No workflow active"})
-            
-        point_index = self.current_workflow.current_point_index
-        point = self.current_workflow.points[point_index]
-        task_index = point.current_task_index
-        task = point.tasks[task_index]
-        
-        return json.dumps({
-            "task_id": f"{point_index}.{task_index}",
-            "point_title": point.title,
-            "task_description": task,
-            "total_points": len(self.current_workflow.points),
-            "total_tasks": len(point.tasks)
-        })
-
-    async def mark_task_complete(self, task_id: str, result: str) -> str:
-        """Mark a task as completed successfully."""
         try:
-            point_index, task_index = map(int, task_id.split("."))
+            if not self.current_workflow:
+                return json.dumps({"error": "No workflow active"})
             
-            # Verify this is the current task
-            if (self.current_workflow.current_point_index != point_index or 
-                self.current_workflow.points[point_index].current_task_index != task_index):
-                return "Error: Cannot complete a task that is not current"
+            # Get current task from orchestrator
+            orchestrator_task = self.orchestrator.get_current_task()
+            if not orchestrator_task:
+                return json.dumps({"error": "No current task available"})
             
-            # Update progress
-            self.orchestrator.update_progress(point_index, task_index, completed=True)
+            # Get current task details
+            task_index = self.current_workflow.current_task_index
+            total_tasks = len(self.current_workflow.tasks)
             
-            # Send success message
-            await self.send_to_websocket(f"\nAuto Browser: ✓ {result}")
-            
-            # Handle progression to next task/point
-            current_point = self.current_workflow.points[point_index]
-            print(f"[Worker] Current point index: {point_index}, task index: {task_index}")
-            print(f"[Worker] Total tasks in point: {len(current_point.tasks)}")
-            
-            # If we completed all tasks in current point
-            if task_index >= len(current_point.tasks) - 1:
-                print("[Worker] Completed all tasks in current point")
-                # If we have more points, move to first task of next point
-                if point_index < len(self.current_workflow.points) - 1:
-                    print(f"[Worker] Moving to next point {point_index + 1}")
-                    self.orchestrator.update_progress(point_index + 1, 0)
-                else:
-                    print("[Worker] No more points, workflow complete")
-                    await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
-            else:
-                print(f"[Worker] Moving to next task {task_index + 1}")
-                # Move to next task in current point
-                self.orchestrator.update_progress(point_index, task_index + 1)
-            
-            return "Task marked as complete"
-            
-        except Exception as e:
-            return f"Error marking task complete: {str(e)}"
-
-    async def mark_task_failed(self, task_id: str, reason: str) -> str:
-        """Mark a task as failed."""
-        try:
-            point_index, task_index = map(int, task_id.split("."))
-            
-            # Verify this is the current task
-            if (self.current_workflow.current_point_index != point_index or 
-                self.current_workflow.points[point_index].current_task_index != task_index):
-                return "Error: Cannot fail a task that is not current"
-            
-            # Send failure message
-            await self.send_to_websocket(f"\nAuto Browser: ❌ Task failed: {reason}")
-            
-            # Ask orchestrator for guidance
-            context = {
-                "point_title": self.current_workflow.points[point_index].title,
-                "task": self.current_workflow.points[point_index].tasks[task_index],
-                "failure_reason": reason
+            # Create task info using orchestrator's plan - convert to one-based indexing
+            task_info = {
+                "task_id": str(task_index + 1),  # Convert to one-based
+                "task_title": orchestrator_task["task_title"],
+                "task_description": str(orchestrator_task["task"]),
+                "total_tasks": total_tasks,
+                "current_task": task_index + 1,  # Convert to one-based
+                "progress": {
+                    "current_task": task_index,  # Keep zero-based for internal use
+                    "total_tasks": total_tasks,
+                    "current_task_title": orchestrator_task["task_title"],
+                    "current_task_description": str(orchestrator_task["task"])
+                }
             }
             
-            help_response = await self.orchestrator.handle_worker_request(
-                f"Task failed: {reason}. Need guidance on how to proceed.",
-                context
-            )
-            
-            if help_response.startswith("USER_INPUT_REQUIRED:"):
-                user_prompt = help_response[len("USER_INPUT_REQUIRED:"):].strip()
-                await self.send_to_websocket(f"\nAuto Browser: {user_prompt}")
-                self.waiting_for_input = True
-            else:
-                self.messages.add_assistant_text(help_response)
-            
-            return "Task marked as failed"
+            return json.dumps(task_info)
             
         except Exception as e:
-            return f"Error marking task failed: {str(e)}"
-
-    async def display_message(self, message: str) -> str:
-        """Display a message to the user in the chat."""
-        try:
-            await self.send_to_websocket(f"\nAuto Browser: {message}")
-            return "Message displayed successfully"
-        except Exception as e:
-            return f"Error displaying message: {str(e)}"
+            error_msg = f"[Worker] Error in get_current_task: {str(e)}"
+            print(error_msg)
+            return json.dumps({
+                "error": "Failed to get current task",
+                "details": str(e)
+            })
 
     async def _execute_step(self, current_task: Dict[str, Any]) -> bool:
         """Execute a single step using the existing message processing logic."""
+        task_info = None
         try:
             # Get current task info
             task_info = json.loads(await self.get_current_task())
             if "error" in task_info:
+                error_msg = f"Cannot proceed: {task_info['error']}"
+                if 'details' in task_info:
+                    error_msg += f" ({task_info['details']})"
+                await self.display_message(error_msg)
                 return False
 
             # Add current task to messages
-            self.messages.add_system_text(f"""Current workflow point: {task_info['point_title']}
-Current task: {task_info['task_description']}
+            self.messages.add_system_text(f"""Current task: {task_info['task_description']}
 Task ID: {task_info['task_id']}
-Execute this task using the available tools. Mark the task as complete or failed based on the outcome.""")
+Execute this task using the available tools. Only mark the task as complete when you have fully achieved its objective, or mark it as failed if you've exhausted all possible approaches.""")
 
+            # Log messages to chat.log
+            await self._log_messages()
+            print("Messages logged")
+
+            # Add vision support if enabled
+            if self.enable_vision and self.first_step_over:
+                print("Taking screenshot")
+                # Take screenshot of current page
+                screenshot = await self.page.screenshot(type='jpeg', quality=80)
+                if screenshot:
+                    # Save screenshot to temporary file
+                    temp_path = Path("temp_screenshot.jpg")
+                    temp_path.write_bytes(screenshot)
+                    
+                    # Find last user message or create new one
+                    last_message = None
+                    for msg in reversed(self.messages.messages):
+                        if msg.role == "user":
+                            last_message = msg
+                            break
+                    
+                    if last_message:
+                        # Convert existing content to list format if it's a string
+                        if isinstance(last_message.content, str):
+                            text_content = last_message.content
+                            last_message.content = []
+                            if text_content.strip():  # Only add text if not empty
+                                last_message.content.append({
+                                    "type": "text",
+                                    "text": text_content
+                                })
+                    else:
+                        # Create new user message if no existing user message found
+                        last_message = Message(role="user", content=[])
+                        self.messages.add_message(last_message)
+                    
+                    # Add image to the message content
+                    with open(temp_path, "rb") as image_file:
+                        encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+                        last_message.content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{encoded_image}",
+                                "detail": "high"
+                            }
+                        })
+                    
+                    # Clean up temp file
+                    temp_path.unlink()
+
+            print("Getting response from API")
             # Get response from API
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=self.messages.get_messages_for_api(),
                 tools=self.tools,
                 tool_choice="auto",
-                temperature=0.7,
+                temperature=0.3,
                 stream=False
             )
-
+            print(f"Response: {response}")
+            
             # Extract content and tool calls
             content = response.choices[0].message.content or ""
             tool_calls = response.choices[0].message.tool_calls or []
@@ -581,14 +642,12 @@ Execute this task using the available tools. Mark the task as complete or failed
                             tool_responses.append((tool_call.id, result, function_name))
                             
                             # Print result
-                            print(f"Result: {result}")
+                            print(f"Result: {str(result)[:500]}")
                             
                             # Check if this was a task status change
                             if function_name in ["mark_task_complete", "mark_task_failed"] and "Error" not in result:
                                 task_status_changed = True
                                 print(f"[Worker] Task status changed via {function_name}")
-                            elif "Error" in result:
-                                print(f"[Error] Tool call failed: {result}")
                         except Exception as e:
                             error_result = f"Error executing {function_name}: {str(e)}"
                             tool_responses.append((tool_call.id, error_result, function_name))
@@ -619,24 +678,131 @@ Execute this task using the available tools. Mark the task as complete or failed
                 for tool_call_id, result, function_name in tool_responses:
                     self.messages.add_tool_response(tool_call_id, result, function_name)
 
-                # Only stop if task status was explicitly changed
+                # Continue processing unless task was explicitly marked complete/failed
                 return not task_status_changed
 
             # If there are no tool calls but we have content, display it
             if content.strip():
                 await self.display_message(content.strip())
-                await self.mark_task_complete(task_info['task_id'], content.strip())
-                return False
+                return True  # Continue processing since no task status change
 
             # If no tool calls and no content, let the assistant continue
             return True
 
         except Exception as e:
             # Handle unexpected errors
-            print(f"[Worker] Error in _execute_step: {str(e)}")
-            if task_info and 'task_id' in task_info:
+            error_msg = f"[Worker] Error in _execute_step: {str(e)}"
+            print(error_msg)
+            
+            # Only try to mark task as failed if we have valid task info
+            if task_info and isinstance(task_info, dict) and 'task_id' in task_info:
                 await self.mark_task_failed(task_info['task_id'], f"Unexpected error: {str(e)}")
-            return True
+            else:
+                await self.display_message(f"Error: {str(e)}")
+            return False  # Stop processing on error
+
+    async def _log_messages(self) -> None:
+        """Log all messages to chat.log file."""
+        try:
+            # Create log directory if it doesn't exist
+            os.makedirs("log", exist_ok=True)
+            
+            # Write messages to chat.log
+            with open("log/chat.log", "w", encoding="utf-8") as f:
+                f.write("=== Chat History ===\n\n")
+                for msg in self.messages.messages:
+                    # Write role
+                    f.write(f"[{msg.role.upper()}]\n")
+                    
+                    # Handle different content types
+                    if isinstance(msg.content, str):
+                        f.write(f"{msg.content}\n")
+                    elif isinstance(msg.content, list):
+                        for item in msg.content:
+                            if isinstance(item, dict):
+                                if item.get("type") == "text":
+                                    f.write(f"{item['text']}\n")
+                                elif item.get("type") == "image_url":
+                                    f.write("[IMAGE ATTACHMENT]\n")
+                    
+                    # Write tool calls if present
+                    if msg.tool_calls:
+                        f.write("\nTool Calls:\n")
+                        for tool_call in msg.tool_calls:
+                            f.write(f"- {tool_call['function']['name']}\n")
+                            f.write(f"  Arguments: {tool_call['function']['arguments']}\n")
+                    
+                    f.write("\n---\n\n")
+                
+                f.write("=== End Chat History ===\n")
+            
+            print(f"[Worker] Messages logged to log/chat.log")
+            
+        except Exception as e:
+            print(f"[Worker] Error logging messages: {e}")
+
+    async def mark_task_complete(self, task_id: str, result: str) -> str:
+        """Mark a task as completed successfully."""
+        try:
+            # Parse task ID (convert from one-based to zero-based)
+            task_index = int(task_id) - 1
+            
+            # Send success message
+            await self.send_to_websocket(f"\nAuto Browser: ✓ {result}")
+            
+            # Update progress in orchestrator
+            self.orchestrator.update_progress(task_index, completed=True)
+            
+            # Check if we have more tasks
+            if task_index < len(self.current_workflow.tasks) - 1:
+                # Move to next task
+                print(f"[Worker] Moving to next task: {self.current_workflow.tasks[task_index + 1].title}")
+                print(f"[Worker] Task {task_index + 2}/{len(self.current_workflow.tasks)}")  # Display in one-based
+            else:
+                # Workflow is complete
+                await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
+            
+            return "Task marked as complete"
+            
+        except Exception as e:
+            error_msg = f"Error marking task complete: {str(e)}"
+            print(f"[Worker] {error_msg}")
+            return error_msg
+
+    async def mark_task_failed(self, task_id: str, reason: str) -> str:
+        """Mark a task as failed but continue with the workflow."""
+        try:
+            # Parse task ID (convert from one-based to zero-based)
+            task_index = int(task_id) - 1
+            
+            # Send failure message
+            await self.send_to_websocket(f"\nAuto Browser: ❌ Task {task_id} failed: {reason}")  # Keep one-based in message
+            
+            # Move to next task if available
+            if task_index < len(self.current_workflow.tasks) - 1:
+                # Update progress in orchestrator
+                self.orchestrator.update_progress(task_index, completed=False, failed=True)
+                print(f"[Worker] Moving to next task after failure: {self.current_workflow.tasks[task_index + 1].title}")
+                print(f"[Worker] Task {task_index + 2}/{len(self.current_workflow.tasks)}")  # Display in one-based
+            else:
+                # Last task failed
+                await self.send_to_websocket("\nAuto Browser: Workflow completed with some failed tasks. Let me know if you need anything else.")
+                self.current_workflow = None
+            
+            return "Task marked as failed, continuing with next task"
+            
+        except Exception as e:
+            error_msg = f"Error marking task failed: {str(e)}"
+            print(f"[Worker] {error_msg}")
+            return error_msg
+
+    async def display_message(self, message: str) -> str:
+        """Display a message to the user in the chat."""
+        try:
+            await self.send_to_websocket(f"\nAuto Browser: {message}")
+            return "Message displayed successfully"
+        except Exception as e:
+            return f"Error displaying message: {str(e)}"
 
     async def initialize(self):
         """Initialize the worker and send ready message."""
