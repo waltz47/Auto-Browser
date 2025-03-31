@@ -13,6 +13,7 @@ from web.web import get_page_elements, get_main_content
 from web.handler import process, test_selectors_on_page, enhance_json_with_selectors
 from tools import functions as web_tools
 from messages import MessageHistory, Message
+from orchestrator import Orchestrator
 
 class Worker:
     def __init__(self, page: Page, worker_id: int, request_queue, api: str, model: str, max_messages: int, tools=None, websocket=None, enable_vision=False):
@@ -27,11 +28,15 @@ class Worker:
         self.is_running = True
         self.waiting_for_input = False
         self.current_task = "Initializing"
-        self.tools = tools or web_tools  # Use provided tools or default to web_tools
+        self.tools = tools or web_tools
         self.messages = self._init_message_history()
-        self.websocket = websocket  # Add websocket support
-        self.enable_vision = enable_vision  # Store vision flag
+        self.websocket = websocket
+        self.enable_vision = enable_vision
         self.first_step_over = False
+        
+        # Initialize orchestrator
+        self.orchestrator = Orchestrator(model=model)
+        self.current_workflow = None
 
     def _init_message_history(self) -> MessageHistory:
         """Initialize the message history with system prompt."""
@@ -43,7 +48,7 @@ class Worker:
             print("No custom instructions found")
 
         tools_description = """
-IMPORTANT: You can ONLY use the following tools. Do not attempt to use any other functions:
+IMPORTANT: You have access to the following tools to help complete your tasks. Each tool call is an atomic operation that may succeed or fail:
 
 1. move_to_url(url: str) - Navigate to a specific URL
 2. get_url_contents() - Get the contents of the current page
@@ -53,10 +58,26 @@ IMPORTANT: You can ONLY use the following tools. Do not attempt to use any other
 6. highlight_element(xpathSelector: str) - Highlight an element for visibility
 7. move_and_click_at_page_position(x: float, y: float) - Click at specific coordinates
 
-Do not attempt to use any other functions that are not listed above.
+Additionally, you have special tools to manage task status:
+- mark_task_complete(task_id: str, result: str) - Mark a task as successfully completed
+- mark_task_failed(task_id: str, reason: str) - Mark a task as failed after exhausting all options
+- display_message(message: str) - Show a message to the user
+
+Remember:
+- Individual tool calls may fail (e.g., element not found) - this is normal and you should try alternatives
+- A task fails only when you've exhausted all possible approaches
+- Only mark a task complete when you've achieved its objective
+- You can make multiple tool calls within a single task
 """
 
         system_prompt = f'''You are an advanced AI agent capable of performing complex web-based tasks. Your capabilities include:
+
+### Task Management
+- Break down complex tasks into manageable steps
+- Try multiple approaches if initial attempts fail
+- Only mark tasks as complete when objectives are achieved
+- Only mark tasks as failed after exhausting all options
+- Maintain task state across multiple tool calls
 
 ### Information Processing
 - Research and data gathering through web searches
@@ -64,13 +85,6 @@ Do not attempt to use any other functions that are not listed above.
 - Analysis and synthesis of complex data
 - Fact-checking and validation
 - Structured and unstructured data processing
-
-### Content Creation
-- Writing and editing various types of content
-- Creating documentation and reports
-- Drafting communications
-- Code generation and editing
-- Content formatting and structuring
 
 ### Problem Solving
 - Systematic breakdown of complex tasks
@@ -80,13 +94,13 @@ Do not attempt to use any other functions that are not listed above.
 - Dynamic response to changing requirements
 
 Instructions:
-1. Execute tasks using ONLY the available tools listed below
-2. Work autonomously to complete the task
-3. Break down complex tasks into manageable steps
-4. Handle errors and blocked states by trying alternative approaches
-5. Only request user input if absolutely necessary
-6. Maintain a clear record of actions and results
-7. Verify completion of each step before proceeding
+1. Each task is a goal to achieve, which may require multiple tool calls
+2. Tool calls are atomic operations that may succeed or fail
+3. Failed tool calls don't mean task failure - try alternative approaches
+4. Only mark a task as failed when you've exhausted all possible approaches
+5. Only mark a task as complete when you've achieved its objective
+6. Handle errors and blocked states by trying alternative approaches
+7. Only request user input if absolutely necessary
 
 {tools_description}
 
@@ -118,14 +132,20 @@ Instructions:
             raise
 
     async def process_user_input(self, user_input: str):
-        """Process user input and start executing the task."""
+        """Process user input by creating a workflow and starting execution."""
         try:
-            # Add the user input to message history
-            self.messages.add_user_text(user_input)
+            # Create workflow using orchestrator
+            self.current_workflow = await self.orchestrator.create_workflow(user_input)
             
-            # Send acknowledgment to user
-            await self.send_to_websocket(f"\nAuto Browser: I'll help you with that. Let me get started.\n")
+            # Send initial workflow info to user
+            workflow_msg = f"\nAuto Browser: Created workflow: {self.current_workflow.title}\n"
+            for i, point in enumerate(self.current_workflow.points, 1):
+                workflow_msg += f"\n{i}. {point.title}\n"
+                workflow_msg += f"   Description: {point.description}\n"
             
+            await self.send_to_websocket(workflow_msg)
+            
+            # Start executing workflow
             return True
             
         except Exception as e:
@@ -134,21 +154,84 @@ Instructions:
             return False
 
     async def step(self) -> bool:
-        """Execute the next step of the task."""
+        """Execute the next step in the workflow."""
+        if not self.current_workflow:
+            return False
+
         try:
-            # Execute the step using the existing logic
-            active = await self._execute_step("")
+            # Get current task details
+            current_task = self.orchestrator.get_current_task()
+            
+            # Only stop if there are no more tasks AND we're at the end of all points
+            if not current_task:
+                if self.current_workflow.current_point_index >= len(self.current_workflow.points):
+                    await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
+                    return False
+                else:
+                    # We still have more points to process
+                    print("[Worker] Moving to next point's tasks")
+                    return True
 
-            if not active:
-                await self.send_to_websocket("\nAuto Browser: Task completed! Let me know if you need anything else.")
-                return False
+            # Update progress
+            await self.send_progress_update(current_task["progress"])
 
-            return active
+            # Print current task info
+            print(f"[Worker] Executing task: {current_task['task']}")
+            print(f"[Worker] Point: {current_task['progress']['current_point_title']}")
+            print(f"[Worker] Task index: {current_task['progress']['current_task']}/{current_task['progress']['total_tasks']}")
+
+            # Execute the task
+            active = await self._execute_step(current_task)
+            print(f"[Worker] Task execution result - active: {active}")
+
+            # Always return True unless explicitly waiting for input or workflow complete
+            # This ensures we continue processing tasks across points
+            return True
 
         except Exception as e:
+            error_details = traceback.format_exc()
+            print(f"[Worker Error] Caught exception in step: {e}\nDetails: {error_details}")
             await self.send_to_websocket(f"Error in step: {e}", debug=True)
-            traceback.print_exc()
-            return False
+            
+            # Ask orchestrator for help
+            context = {
+                "current_point": self.current_workflow.points[self.current_workflow.current_point_index].title,
+                "current_task": current_task["task"] if current_task else "Unknown",
+                "error_message": str(e),
+                "traceback": error_details
+            }
+            print(f"[Worker Error] Asking orchestrator for help with context: {context}")
+            
+            help_response = await self.orchestrator.handle_worker_request(
+                f"Error occurred: {str(e)}. Need guidance on how to proceed.",
+                context
+            )
+            print(f"[Worker Error] Received help response from orchestrator: '{help_response}'")
+            
+            if help_response.startswith("USER_INPUT_REQUIRED:"):
+                print("[Worker Error] Orchestrator requested user input.")
+                user_prompt = help_response[len("USER_INPUT_REQUIRED:"):].strip()
+                await self.send_to_websocket(f"\nAuto Browser: {user_prompt}")
+                print(f"[Worker Error] Sent prompt to user: '{user_prompt}'")
+                self.waiting_for_input = True
+                print("[Worker Error] Set waiting_for_input = True")
+                return False
+            else:
+                print("[Worker Error] Orchestrator provided guidance. Adding to messages and retrying.")
+                self.messages.add_assistant_text(help_response)
+                return True
+
+    async def send_progress_update(self, progress: Dict[str, Any]):
+        """Send progress update to the dashboard."""
+        if self.websocket:
+            try:
+                progress_msg = {
+                    "type": "progress_update",
+                    "data": progress
+                }
+                await self.websocket.send_text(json.dumps(progress_msg))
+            except Exception as e:
+                print(f"Error sending progress update: {e}")
 
     async def move_to_url(self, url: str) -> str:
         """Navigate to a URL with retry logic and error handling."""
@@ -320,7 +403,7 @@ Instructions:
             if (count == 0):
                 return None, "Invalid XPath: No elements found"
             if (count > 1 and not first_only):
-                return None, f"There are multiple HTML elements found for the xpath selector: {selector}. Pick the required one with >> n selector notation. Eg: xpath=//div[@class='class-name']>>1"
+                return None, f"There are multiple HTML elements found for the xpath selector: {selector}. Pick the required one with [] selector notation. Eg: xpath=//div[@class='class-name'][n]"
             if first_only:
                 locator = locator.first
             return locator, None
@@ -334,42 +417,133 @@ Instructions:
             print(message)
         elif self.websocket:
             # Regular messages go to dashboard
+            print(f"[Worker] Attempting to send to websocket {id(self.websocket)}: {message[:50].strip()}...") # Log attempt
             try:
                 await self.websocket.send_text(message.strip())
+                print(f"[Worker] Sent message successfully to {id(self.websocket)}.") # Log success
             except Exception as e:
-                print(f"Error sending to websocket: {e}")
+                print(f"[Worker] Error sending to websocket {id(self.websocket)}: {e}") # Log error
         else:
             # If no websocket, everything goes to terminal
-            print(message)
+            print(f"[Worker] No websocket available. Printing to terminal: {message}")
 
-    async def _execute_step(self, step: str) -> bool:
+    async def get_current_task(self) -> str:
+        """Get information about the current task."""
+        if not self.current_workflow:
+            return json.dumps({"error": "No workflow active"})
+            
+        point_index = self.current_workflow.current_point_index
+        point = self.current_workflow.points[point_index]
+        task_index = point.current_task_index
+        task = point.tasks[task_index]
+        
+        return json.dumps({
+            "task_id": f"{point_index}.{task_index}",
+            "point_title": point.title,
+            "task_description": task,
+            "total_points": len(self.current_workflow.points),
+            "total_tasks": len(point.tasks)
+        })
+
+    async def mark_task_complete(self, task_id: str, result: str) -> str:
+        """Mark a task as completed successfully."""
+        try:
+            point_index, task_index = map(int, task_id.split("."))
+            
+            # Verify this is the current task
+            if (self.current_workflow.current_point_index != point_index or 
+                self.current_workflow.points[point_index].current_task_index != task_index):
+                return "Error: Cannot complete a task that is not current"
+            
+            # Update progress
+            self.orchestrator.update_progress(point_index, task_index, completed=True)
+            
+            # Send success message
+            await self.send_to_websocket(f"\nAuto Browser: ✓ {result}")
+            
+            # Handle progression to next task/point
+            current_point = self.current_workflow.points[point_index]
+            print(f"[Worker] Current point index: {point_index}, task index: {task_index}")
+            print(f"[Worker] Total tasks in point: {len(current_point.tasks)}")
+            
+            # If we completed all tasks in current point
+            if task_index >= len(current_point.tasks) - 1:
+                print("[Worker] Completed all tasks in current point")
+                # If we have more points, move to first task of next point
+                if point_index < len(self.current_workflow.points) - 1:
+                    print(f"[Worker] Moving to next point {point_index + 1}")
+                    self.orchestrator.update_progress(point_index + 1, 0)
+                else:
+                    print("[Worker] No more points, workflow complete")
+                    await self.send_to_websocket("\nAuto Browser: Workflow completed! Let me know if you need anything else.")
+            else:
+                print(f"[Worker] Moving to next task {task_index + 1}")
+                # Move to next task in current point
+                self.orchestrator.update_progress(point_index, task_index + 1)
+            
+            return "Task marked as complete"
+            
+        except Exception as e:
+            return f"Error marking task complete: {str(e)}"
+
+    async def mark_task_failed(self, task_id: str, reason: str) -> str:
+        """Mark a task as failed."""
+        try:
+            point_index, task_index = map(int, task_id.split("."))
+            
+            # Verify this is the current task
+            if (self.current_workflow.current_point_index != point_index or 
+                self.current_workflow.points[point_index].current_task_index != task_index):
+                return "Error: Cannot fail a task that is not current"
+            
+            # Send failure message
+            await self.send_to_websocket(f"\nAuto Browser: ❌ Task failed: {reason}")
+            
+            # Ask orchestrator for guidance
+            context = {
+                "point_title": self.current_workflow.points[point_index].title,
+                "task": self.current_workflow.points[point_index].tasks[task_index],
+                "failure_reason": reason
+            }
+            
+            help_response = await self.orchestrator.handle_worker_request(
+                f"Task failed: {reason}. Need guidance on how to proceed.",
+                context
+            )
+            
+            if help_response.startswith("USER_INPUT_REQUIRED:"):
+                user_prompt = help_response[len("USER_INPUT_REQUIRED:"):].strip()
+                await self.send_to_websocket(f"\nAuto Browser: {user_prompt}")
+                self.waiting_for_input = True
+            else:
+                self.messages.add_assistant_text(help_response)
+            
+            return "Task marked as failed"
+            
+        except Exception as e:
+            return f"Error marking task failed: {str(e)}"
+
+    async def display_message(self, message: str) -> str:
+        """Display a message to the user in the chat."""
+        try:
+            await self.send_to_websocket(f"\nAuto Browser: {message}")
+            return "Message displayed successfully"
+        except Exception as e:
+            return f"Error displaying message: {str(e)}"
+
+    async def _execute_step(self, current_task: Dict[str, Any]) -> bool:
         """Execute a single step using the existing message processing logic."""
         try:
-            # Print current messages for debugging (terminal only)
-            await self.send_to_websocket("\n=== Current Messages ===", debug=True)
-            for msg in self.messages.get_messages_for_api():
-                if msg.get('role') == 'user' and 'content' in msg and isinstance(msg['content'], list):
-                    await self.send_to_websocket(f"[{msg['role']}]: [Image data omitted]", debug=True)
-                else:
-                    await self.send_to_websocket(f"[{msg['role']}]: {msg['content'][:200]}...", debug=True)
-            await self.send_to_websocket("=== End Messages ===\n", debug=True)
+            # Get current task info
+            task_info = json.loads(await self.get_current_task())
+            if "error" in task_info:
+                return False
 
-            self.first_step_over = False
-            # Capture screenshot if page exists and vision is enabled
-            if self.page and self.enable_vision and self.first_step_over:
-                try:
-                    screenshot = await self.page.screenshot(type='jpeg', quality=80)
-                    if screenshot:
-                        # Save screenshot temporarily
-                        temp_path = "log/temp_screenshot.jpg"
-                        with open(temp_path, "wb") as f:
-                            f.write(screenshot)
-                        # Add screenshot to messages
-                        self.messages.add_user_with_image("Current browser view:", temp_path)
-                        await self.send_to_websocket("Added screenshot to API call", debug=True)
-                except Exception as e:
-                    await self.send_to_websocket(f"Error capturing screenshot: {e}", debug=True)
-            self.first_step_over = True
+            # Add current task to messages
+            self.messages.add_system_text(f"""Current workflow point: {task_info['point_title']}
+Current task: {task_info['task_description']}
+Task ID: {task_info['task_id']}
+Execute this task using the available tools. Mark the task as complete or failed based on the outcome.""")
 
             # Get response from API
             response = await self.client.chat.completions.create(
@@ -385,126 +559,85 @@ Instructions:
             content = response.choices[0].message.content or ""
             tool_calls = response.choices[0].message.tool_calls or []
 
-            # Process the response
-            if content or tool_calls:
-                # Add the assistant message
-                if tool_calls:
-                    message = Message(
-                        role="assistant",
-                        content=content,
-                        tool_calls=[{
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        } for tc in tool_calls]
-                    )
-                    self.messages.add_message(message)
+            # Process tool calls if any
+            if tool_calls:
+                # First collect all tool responses
+                tool_responses = []  # Store all tool responses
+                task_status_changed = False  # Track if task was marked complete/failed
+                
+                print("\n=== Tool Calls Debug ===")
+                for tool_call in tool_calls:
+                    function_name = tool_call.function.name
+                    arguments = json.loads(tool_call.function.arguments)
                     
-                    # Send content to websocket if available
-                    if content and content.strip():
-                        await self.send_to_websocket(f"\nAuto Browser: {content}")
-                    
-                    # Process tool calls
-                    for tool_call in tool_calls:
-                        function_name = tool_call.function.name
-                        arguments = tool_call.function.arguments
+                    # Print tool call details
+                    print(f"\n[Tool Call] {function_name}")
+                    print(f"Arguments: {json.dumps(arguments, indent=2)}")
 
-                        if not arguments or arguments.strip() == '':
-                            error_result = f"Error: Missing arguments for {function_name}"
-                            await self.send_to_websocket(error_result, debug=True)
-                            self.messages.add_tool_response(tool_call.id, error_result, function_name)
-                            # Get next step from planner
-                            next_step = await self.planner.get_next_step(
-                                f"Attempted to execute {function_name}",
-                                error_result,
-                                f"Current URL: {self.page.url}"
-                            )
-                            self.messages.add_user_text(next_step)
-                            continue
+                    if hasattr(self, function_name):
+                        try:
+                            tool_function = getattr(self, function_name)
+                            result = await tool_function(**arguments)
+                            tool_responses.append((tool_call.id, result, function_name))
+                            
+                            # Print result
+                            print(f"Result: {result}")
+                            
+                            # Check if this was a task status change
+                            if function_name in ["mark_task_complete", "mark_task_failed"] and "Error" not in result:
+                                task_status_changed = True
+                                print(f"[Worker] Task status changed via {function_name}")
+                            elif "Error" in result:
+                                print(f"[Error] Tool call failed: {result}")
+                        except Exception as e:
+                            error_result = f"Error executing {function_name}: {str(e)}"
+                            tool_responses.append((tool_call.id, error_result, function_name))
+                            print(f"[Exception] {error_result}")
+                    else:
+                        error_result = f"Error: Function {function_name} is not available"
+                        tool_responses.append((tool_call.id, error_result, "error"))
+                        print(f"[Error] {error_result}")
+                
+                print("\n=== End Tool Calls Debug ===\n")
 
-                        # Execute the tool function
-                        if hasattr(self, function_name):
-                            try:
-                                tool_function = getattr(self, function_name)
-                                args_dict = json.loads(arguments)
-                                
-                                # Send user-friendly description of the tool call
-                                friendly_message = None
-                                if function_name == "move_to_url":
-                                    friendly_message = f"\nAuto Browser: Browsing to {args_dict.get('url', 'website')}"
-                                elif function_name == "get_url_contents":
-                                    friendly_message = "\nAuto Browser: Reading page contents"
-                                elif function_name == "send_keys_to_element":
-                                    friendly_message = f"\nAuto Browser: Typing '{args_dict.get('keys', '')}' into selected field"
-                                elif function_name == "click_element":
-                                    friendly_message = "\nAuto Browser: Clicking on selected element"
-                                elif function_name == "call_submit":
-                                    friendly_message = "\nAuto Browser: Submitting form"
-                                elif function_name == "highlight_element":
-                                    friendly_message = "\nAuto Browser: Highlighting element"
-                                elif function_name == "move_and_click_at_page_position":
-                                    friendly_message = "\nAuto Browser: Clicking at specific position"
-                                
-                                if friendly_message:
-                                    await self.send_to_websocket(friendly_message)
-                                
-                                # Execute the tool call
-                                result = await tool_function(**args_dict)
-                                await self.send_to_websocket(f"Tool {function_name}: {result}", debug=True)
-                                self.messages.add_tool_response(tool_call.id, result, function_name)
-                            except Exception as e:
-                                error_result = f"Error executing {function_name}: {str(e)}"
-                                await self.send_to_websocket(error_result, debug=True)
-                                self.messages.add_tool_response(tool_call.id, error_result, function_name)
-                                # Get next step from planner
-                                next_step = await self.planner.get_next_step(
-                                    f"Attempted to execute {function_name}",
-                                    error_result,
-                                    f"Current URL: {self.page.url}"
-                                )
-                                self.messages.add_user_text(next_step)
-                        else:
-                            error_result = f"Error: Function {function_name} is not available"
-                            await self.send_to_websocket(error_result, debug=True)
-                            self.messages.add_tool_response(tool_call.id, error_result, "error")
-                            # Get next step from planner
-                            next_step = await self.planner.get_next_step(
-                                f"Attempted to use unavailable function {function_name}",
-                                error_result,
-                                f"Current URL: {self.page.url}"
-                            )
-                            self.messages.add_user_text(next_step)
-                    
-                    return True
-                else:
-                    # Send the message to websocket and wait for user input
-                    if content and content.strip():
-                        await self.send_to_websocket(f"\nAuto Browser: {content}")
-                        self.messages.add_assistant_message(content)
-                    return False  # Stop here and wait for user input
-
-            else:
-                await self.send_to_websocket("Empty response from API", debug=True)
-                # Get next step from planner
-                next_step = await self.planner.get_next_step(
-                    "Received empty response from API",
-                    "No content or tool calls in response",
-                    f"Current URL: {self.page.url}"
+                # Now add the assistant message with tool calls
+                message = Message(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[{
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }
+                    } for tc in tool_calls]
                 )
-                self.messages.add_user_text(next_step)
+                self.messages.add_message(message)
+
+                # Then add all tool responses to message history
+                for tool_call_id, result, function_name in tool_responses:
+                    self.messages.add_tool_response(tool_call_id, result, function_name)
+
+                # Only stop if task status was explicitly changed
+                return not task_status_changed
+
+            # If there are no tool calls but we have content, display it
+            if content.strip():
+                await self.display_message(content.strip())
+                await self.mark_task_complete(task_info['task_id'], content.strip())
                 return False
 
+            # If no tool calls and no content, let the assistant continue
+            return True
+
         except Exception as e:
-            await self.send_to_websocket(f"Error in step: {e}", debug=True)
-            traceback.print_exc()
-            # Get next step from planner
-            next_step = await self.planner.get_next_step(
-                "Encountered an error during step execution",
-                str(e),
-                f"Current URL: {self.page.url}"
-            )
-            self.messages.add_user_text(next_step)
-            return False
+            # Handle unexpected errors
+            print(f"[Worker] Error in _execute_step: {str(e)}")
+            if task_info and 'task_id' in task_info:
+                await self.mark_task_failed(task_info['task_id'], f"Unexpected error: {str(e)}")
+            return True
+
+    async def initialize(self):
+        """Initialize the worker and send ready message."""
+        await self.setup_client()

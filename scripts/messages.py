@@ -152,6 +152,10 @@ class MessageHistory:
         """Add a message to the history."""
         self.messages.append(message)
         
+    def add_system_text(self, text: str) -> None:
+        """Add a system text message."""
+        self.add_message(Message.create_text("system", text))
+        
     def add_user_text(self, text: str) -> None:
         """Add a user text message."""
         self.add_message(Message.create_text("user", text))

@@ -149,16 +149,9 @@ class Nyx:
                 if not self.page:
                     await self.setup_browser()
 
-                # Initialize or update worker
+                # Initialize or update worker (this will now also send the ready message)
                 worker = await self.create_worker(websocket)
                 
-                try:
-                    print("\n=== Nyx AI Initialized ===")
-                    print("Worker initialized and ready!")
-                    await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
-                except RuntimeError:
-                    return
-
                 while True:
                     try:
                         # Get message from websocket
@@ -299,25 +292,33 @@ class Nyx:
         return BrowserVideoStreamTrack(self)
 
     async def create_worker(self, websocket=None) -> Worker:
-        """Create and initialize a single worker."""
+        """Create or update worker instance and ensure ready message is sent."""
         if not self.worker:
-            # Convert string 'true'/'false' to boolean
-            enable_vision = self.config.get("enable_vision", "false").lower() == "true"
-            
             self.worker = Worker(
                 page=self.page,
-                worker_id=0,
+                worker_id=1,
                 request_queue=None,
                 api=self.api,
                 model=self.MODEL,
-                max_messages=100,
-                tools=self.tools,
-                websocket=websocket,
-                enable_vision=enable_vision  # Pass the vision flag
+                max_messages=10,
+                websocket=websocket, # Assign websocket during creation
+                enable_vision=True
             )
-            await self.worker.setup_client()
+            # Initialize the worker (sets up API client, etc.)
+            await self.worker.initialize()
         else:
+            # Update websocket for existing worker
             self.worker.websocket = websocket
+            
+        # Send ready message using the worker's assigned websocket
+        print(f"[Nyx] Attempting to send ready message via websocket {id(self.worker.websocket)}")
+        await asyncio.sleep(0.1) # Add a small delay (100ms)
+        try:
+            await self.worker.send_to_websocket("\nAuto Browser is ready. Enter your task below.")
+            print("[Nyx] Sent ready message successfully.")
+        except Exception as e:
+            print(f"[Nyx] Error sending ready message: {e}")
+            
         return self.worker
 
     async def handle_websocket(self, websocket: WebSocket):
@@ -344,7 +345,6 @@ class Nyx:
             try:
                 print("\n=== Nyx AI Initialized ===")
                 print("Worker initialized and ready!")
-                await websocket.send_text("\nAuto Browser is ready. Enter your task below.\n")
             except RuntimeError:
                 return
 

@@ -46,7 +46,7 @@ def async_profile(func: Callable) -> Callable:
             pr.disable()
             s = io.StringIO()
             ps = pstats.Stats(pr, stream=s).sort_stats('cumulative')
-            ps.print_stats(20)  # Print top 20 time-consuming operations
+            # ps.print_stats(20)  # Print top 20 time-consuming operations
             
             print(f"\n[PROFILE] Function {func.__name__}")
             print(f"[PROFILE] Total time: {end_time - start_time:.4f}s")

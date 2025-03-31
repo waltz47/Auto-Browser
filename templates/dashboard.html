@@ -343,11 +343,98 @@
         @keyframes typing {
             50% { opacity: 1; }
         }
+
+        /* Add progress bar styles */
+        #progress-container {
+            padding: 16px;
+            background: white;
+            border-bottom: 1px solid var(--border-color);
+            display: none;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .progress-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--text-color);
+        }
+
+        .progress-stats {
+            font-size: 14px;
+            color: #64748b;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-details {
+            font-size: 14px;
+            color: #64748b;
+            margin-top: 8px;
+        }
+
+        .current-task {
+            background: #f8fafc;
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+        }
+
+        .current-task-title {
+            font-weight: 500;
+            color: var(--text-color);
+            margin-bottom: 4px;
+        }
+
+        .current-task-description {
+            color: #64748b;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
     <div id="chat-container">
         <div id="connection-status">Connecting...</div>
+        
+        <!-- Add progress container -->
+        <div id="progress-container">
+            <div class="progress-header">
+                <div class="progress-title">Workflow Progress</div>
+                <div class="progress-stats">
+                    Point <span id="current-point">0</span>/<span id="total-points">0</span>
+                </div>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+            <div class="progress-details">
+                Task <span id="current-task">0</span>/<span id="total-tasks">0</span>
+            </div>
+            <div class="current-task">
+                <div class="current-task-title" id="current-point-title">Not started</div>
+                <div class="current-task-description" id="current-task-description">Waiting to begin...</div>
+            </div>
+        </div>
+
         <div id="messages"></div>
         <div id="input-container">
             <textarea id="user-input" placeholder="Connecting..." rows="1" disabled></textarea>
@@ -495,8 +582,26 @@
                 };
 
                 ws.onmessage = function(event) {
+                    // Log ALL incoming messages immediately
+                    console.log("[Dashboard] ws.onmessage triggered. Data:", event.data);
+
+                    let isProgressUpdate = false;
+                    try {
+                        const jsonData = JSON.parse(event.data);
+                        if (jsonData && jsonData.type === 'progress_update') {
+                            console.log("[Dashboard] Received progress update JSON.");
+                            updateProgress(jsonData.data);
+                            isProgressUpdate = true;
+                            return; // Handled progress update, stop further processing
+                        }
+                    } catch (e) {
+                        // Not JSON or not a progress update, continue to process as text
+                        console.log("[Dashboard] Message is not a progress update JSON, processing as text.");
+                    }
+
+                    // Process as text message if it wasn't a handled progress update
                     const text = event.data.trim();
-                    console.log("Raw message received:", text);
+                    console.log("[Dashboard] Processing text message:", text);
 
                     // Check for refresh command FIRST
                     if (text === "__REFRESH_PAGE__") {
@@ -560,10 +665,10 @@
                             messages.scrollTop = messages.scrollHeight;
                             console.log("Message processed and added to display");
                         } catch (error) {
-                            console.error("Error processing message:", error);
+                            console.error("Error processing message display:", error);
                         }
                     } else {
-                         console.log("Skipping message because agent is not ready:", text)
+                         console.log("Skipping message because agent is not ready:", text);
                     }
                 };
 
@@ -877,6 +982,26 @@
         resizer.style.display = 'none';
 
         // No initial WebRTC setup call here, it's triggered after WS connect and agent ready message
+
+        // Add progress update handler
+        function updateProgress(progress) {
+            const progressContainer = document.getElementById('progress-container');
+            const progressFill = document.querySelector('.progress-fill');
+            
+            // Show progress container
+            progressContainer.style.display = 'block';
+            
+            // Update progress bar and stats
+            document.getElementById('current-point').textContent = progress.current_point;
+            document.getElementById('total-points').textContent = progress.total_points;
+            document.getElementById('current-task').textContent = progress.current_task;
+            document.getElementById('total-tasks').textContent = progress.total_tasks;
+            document.getElementById('current-point-title').textContent = progress.current_point_title;
+            document.getElementById('current-task-description').textContent = progress.current_task_description;
+            
+            // Update progress bar
+            progressFill.style.width = `${progress.overall_progress}%`;
+        }
     </script>
 </body>
 </html> 

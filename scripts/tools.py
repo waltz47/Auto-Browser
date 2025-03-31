@@ -31,25 +31,6 @@ functions = [
             },
         }
     },
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "set_element",
-    #         "description": "Set a page element as active.",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "xpathSelector": {
-    #                     "type": "string",
-    #                     "description": "The xpath selector for an element.",
-    #                     "example_value": "//a[contains(@href, 'google.x')], //a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'google.x')]",
-    #                 },
-    #             },
-    #             "required": ["xpathSelector"],
-    #             "optional": [],
-    #         },
-    #     }
-    # },
     {
         "type": "function",
         "function": {
@@ -155,78 +136,79 @@ functions = [
             },
         }
     },
-
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_task_complete",
+            "description": "Mark the current task as completed successfully.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The ID of the task being completed",
+                    },
+                    "result": {
+                        "type": "string",
+                        "description": "Brief description of what was accomplished",
+                    }
+                },
+                "required": ["task_id", "result"],
+                "optional": [],
+            },
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mark_task_failed",
+            "description": "Mark the current task as failed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The ID of the task that failed",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the task failed",
+                    }
+                },
+                "required": ["task_id", "reason"],
+                "optional": [],
+            },
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_task",
+            "description": "Get information about the current task being executed.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "optional": [],
+            },
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "display_message",
+            "description": "Display a message to the user in the chat. Use this to show results, summaries, or any other information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message to display to the user",
+                    }
+                },
+                "required": ["message"],
+                "optional": [],
+            },
+        }
+    }
 ]
-
-# elements_info = self.page.evaluate("""() => {
-#     setTimeout(() => {
-#         const overlays = document.querySelectorAll('div[style*="border: 2px dashed blue"]');
-#         overlays.forEach(overlay => overlay.remove());
-#     }, 8000); // 8 second timeout to remove overlays
-#     const getElements = () => {
-#         const elements = {
-#             inputs: [...document.querySelectorAll("input, textarea")],
-#             buttons: [...document.querySelectorAll("button, [role='button']")],
-#             links: [...document.querySelectorAll("a")]
-#         };
-        
-#         const result = {elements: {}};
-#         let counter = 1;
-        
-#         for (const [key, elemList] of Object.entries(elements)) {
-#             result.elements[key] = elemList.map(elem => {
-#                 const box = elem.getBoundingClientRect();
-#                 const info = {
-#                     tag: elem.tagName.toLowerCase(),
-#                     type: elem.type,
-#                     id: elem.id,
-#                     name: elem.name,
-#                     value: elem.value,
-#                     ariaLabel: elem.getAttribute('aria-label'),
-#                     role: elem.getAttribute('role'),
-#                     text: elem.innerText,
-#                     classes: elem.className,
-#                     elementNumber: counter,
-#                     /*bbox: {
-#                         x: box.x,
-#                         y: box.y,
-#                         width: box.width,
-#                         height: box.height
-#                     }*/
-#                 };
-                
-#                 const overlay = document.createElement('div');
-#                 overlay.style.cssText = `
-#                     position: fixed;
-#                     border: 2px dashed blue;
-#                     left: ${box.x}px;
-#                     top: ${box.y}px;
-#                     width: ${box.width}px;
-#                     height: ${box.height}px;
-#                     pointer-events: none;
-#                     z-index: 10000;
-#                 `;
-                
-#                 const num = document.createElement('div');
-#                 num.textContent = counter++;
-#                 num.style.cssText = `
-#                     position: absolute;
-#                     left: -20px;
-#                     top: -20px;
-#                     background: red;
-#                     color: white;
-#                     border-radius: 50%;
-#                     padding: 2px 6px;
-#                     font-size: 25px;
-#                 `;
-                
-#                 //overlay.appendChild(num);
-#                 document.body.appendChild(overlay);
-                
-#                 return info;
-#             });
-#         }
-#         return result;
-#     };
-#     return getElements();
-# }""")

@@ -28,11 +28,13 @@ async def run_terminal_mode():
             # Add user input to message history
             worker.messages.add_user_text(user_input)
             
-            # Process task
+            # Process task - only break if waiting for input
             while True:
                 active = await worker.step()
-                if not active or worker.waiting_for_input:
+                if worker.waiting_for_input:
                     break
+                # Sleep briefly to avoid overwhelming the system
+                await asyncio.sleep(0.1)
 
     except KeyboardInterrupt:
         print("\nExiting...")
