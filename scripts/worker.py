@@ -263,10 +263,6 @@ Instructions:
         last_error = None
         self.first_step_over = True
 
-        # Clean up message history before navigating to new URL
-        self.messages.trim_history(self.max_messages)
-        self.element_cache.clear()
-
         while retry_count < max_retries:
             try:
                 # Try different navigation options based on retry count
@@ -322,6 +318,10 @@ Instructions:
     async def get_url_contents(self) -> str:
         """Retrieve and cache the current page's contents."""
         cache_key = self.page.url
+         # Clean up message history before navigating to new URL
+        self.messages.trim_history(self.max_messages)
+        self.element_cache.clear()
+        
         if cache_key in self.element_cache:
             return self.element_cache[cache_key]
         
@@ -472,7 +472,22 @@ Instructions:
             if (count == 0):
                 return None, "Invalid XPath: No elements found"
             if (count > 1 and not first_only):
-                return None, f"There are multiple HTML elements found for the xpath selector: {selector}. Pick the required one with [] selector notation. Eg: xpath=//div[@class='class-name'][n]"
+                # Get text content and attributes for each matching element
+                elements_info = []
+                for i in range(count):
+                    try:
+                        element = locator.nth(i)
+                        text = await element.text_content() or ""
+                        text = text.strip()[:50] + "..." if len(text.strip()) > 50 else text.strip()
+                        class_attr = await element.get_attribute("class") or ""
+                        id_attr = await element.get_attribute("id") or ""
+                        elements_info.append(f"[{i+1}] Text: '{text}', class='{class_attr}', id='{id_attr}'")
+                    except:
+                        elements_info.append(f"[{i+1}] <element details unavailable>")
+                
+                elements_str = "\n".join(elements_info)
+                return None, f"Multiple elements ({count}) found for selector: {selector}\nAvailable elements:\n{elements_str}\nPick the required one with [] selector notation. Example: {xpathSelector}[n]"
+            
             if first_only:
                 locator = locator.first
             return locator, None
