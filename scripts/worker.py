@@ -31,9 +31,6 @@ class Worker:
         self.messages = self._init_message_history()
         self.websocket = websocket  # Add websocket support
         self.enable_vision = enable_vision  # Store vision flag
-        self.planner = None  # Will be initialized in setup_client
-        self.current_steps = []  # Store the current task steps
-        self.current_step_index = 0  # Track the current step being executed
         self.first_step_over = False
 
     def _init_message_history(self) -> MessageHistory:
@@ -56,18 +53,40 @@ IMPORTANT: You can ONLY use the following tools. Do not attempt to use any other
 6. highlight_element(xpathSelector: str) - Highlight an element for visibility
 7. move_and_click_at_page_position(x: float, y: float) - Click at specific coordinates
 
-Do not attempt to use any other functions that are not listed above. Functions like 'create_agent' are not available.
+Do not attempt to use any other functions that are not listed above.
 """
 
-        system_prompt = f'''You are a general purpose AI agent capable of performing web-based tasks. You can browse websites, search for information, and interact with web elements.
+        system_prompt = f'''You are an advanced AI agent capable of performing complex web-based tasks. Your capabilities include:
+
+### Information Processing
+- Research and data gathering through web searches
+- Information verification from multiple sources
+- Analysis and synthesis of complex data
+- Fact-checking and validation
+- Structured and unstructured data processing
+
+### Content Creation
+- Writing and editing various types of content
+- Creating documentation and reports
+- Drafting communications
+- Code generation and editing
+- Content formatting and structuring
+
+### Problem Solving
+- Systematic breakdown of complex tasks
+- Step-by-step solution implementation
+- Error troubleshooting and resolution
+- Adaptive problem-solving approaches
+- Dynamic response to changing requirements
 
 Instructions:
-1. When you need to interact with the web, use ONLY the available tools listed below
-2. When you need more information or clarification, ask the user directly
-3. Be thorough and methodical in your responses
-4. Maintain a natural conversation with the user
-5. Do NOT suggest or try to use tools that are not explicitly listed
-6. After completing a task or when waiting for user input, stop and wait for the next command
+1. Execute tasks using ONLY the available tools listed below
+2. Work autonomously to complete the task
+3. Break down complex tasks into manageable steps
+4. Handle errors and blocked states by trying alternative approaches
+5. Only request user input if absolutely necessary
+6. Maintain a clear record of actions and results
+7. Verify completion of each step before proceeding
 
 {tools_description}
 
@@ -92,11 +111,6 @@ Instructions:
                 self.client = AsyncOpenAI(api_key="____", base_url='http://localhost:11434/v1')
             else:
                 raise ValueError(f"Unsupported API type: {self.api}")
-
-            # Initialize the planner
-            from planner import Planner
-            self.planner = Planner(self.api, self.model)
-            await self.planner.setup_client()
                 
             print("API client initialized successfully")
         except Exception as e:
@@ -104,23 +118,36 @@ Instructions:
             raise
 
     async def process_user_input(self, user_input: str):
-        """Process user input by first planning then executing."""
+        """Process user input and start executing the task."""
         try:
-            # Get the plan
-            plan = await self.planner.plan_task(user_input)
+            # Add the user input to message history
+            self.messages.add_user_text(user_input)
             
-            # Send the plan to the user
-            if plan:
-                await self.send_to_websocket(f"\nAuto Browser: I'll help you with that. Here's what I'm going to do:\n{plan[0]}\n")
-                
-                # Add the plan to message history
-                self.messages.add_user_text(plan[0])
-                
+            # Send acknowledgment to user
+            await self.send_to_websocket(f"\nAuto Browser: I'll help you with that. Let me get started.\n")
+            
             return True
             
         except Exception as e:
             error_msg = f"Error processing user input: {str(e)}"
             await self.send_to_websocket(error_msg)
+            return False
+
+    async def step(self) -> bool:
+        """Execute the next step of the task."""
+        try:
+            # Execute the step using the existing logic
+            active = await self._execute_step("")
+
+            if not active:
+                await self.send_to_websocket("\nAuto Browser: Task completed! Let me know if you need anything else.")
+                return False
+
+            return active
+
+        except Exception as e:
+            await self.send_to_websocket(f"Error in step: {e}", debug=True)
+            traceback.print_exc()
             return False
 
     async def move_to_url(self, url: str) -> str:
@@ -315,23 +342,6 @@ Instructions:
             # If no websocket, everything goes to terminal
             print(message)
 
-    async def step(self) -> bool:
-        """Execute the task using the existing message processing logic."""
-        try:
-            # Execute the step using the existing logic
-            active = await self._execute_step("")
-
-            if not active:
-                await self.send_to_websocket("\nAuto Browser: Task completed! Let me know if you need anything else.")
-                return False
-
-            return active
-
-        except Exception as e:
-            await self.send_to_websocket(f"Error in step: {e}", debug=True)
-            traceback.print_exc()
-            return False
-
     async def _execute_step(self, step: str) -> bool:
         """Execute a single step using the existing message processing logic."""
         try:
@@ -360,6 +370,7 @@ Instructions:
                 except Exception as e:
                     await self.send_to_websocket(f"Error capturing screenshot: {e}", debug=True)
             self.first_step_over = True
+
             # Get response from API
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -405,6 +416,13 @@ Instructions:
                             error_result = f"Error: Missing arguments for {function_name}"
                             await self.send_to_websocket(error_result, debug=True)
                             self.messages.add_tool_response(tool_call.id, error_result, function_name)
+                            # Get next step from planner
+                            next_step = await self.planner.get_next_step(
+                                f"Attempted to execute {function_name}",
+                                error_result,
+                                f"Current URL: {self.page.url}"
+                            )
+                            self.messages.add_user_text(next_step)
                             continue
 
                         # Execute the tool function
@@ -441,10 +459,24 @@ Instructions:
                                 error_result = f"Error executing {function_name}: {str(e)}"
                                 await self.send_to_websocket(error_result, debug=True)
                                 self.messages.add_tool_response(tool_call.id, error_result, function_name)
+                                # Get next step from planner
+                                next_step = await self.planner.get_next_step(
+                                    f"Attempted to execute {function_name}",
+                                    error_result,
+                                    f"Current URL: {self.page.url}"
+                                )
+                                self.messages.add_user_text(next_step)
                         else:
                             error_result = f"Error: Function {function_name} is not available"
                             await self.send_to_websocket(error_result, debug=True)
                             self.messages.add_tool_response(tool_call.id, error_result, "error")
+                            # Get next step from planner
+                            next_step = await self.planner.get_next_step(
+                                f"Attempted to use unavailable function {function_name}",
+                                error_result,
+                                f"Current URL: {self.page.url}"
+                            )
+                            self.messages.add_user_text(next_step)
                     
                     return True
                 else:
@@ -456,9 +488,23 @@ Instructions:
 
             else:
                 await self.send_to_websocket("Empty response from API", debug=True)
+                # Get next step from planner
+                next_step = await self.planner.get_next_step(
+                    "Received empty response from API",
+                    "No content or tool calls in response",
+                    f"Current URL: {self.page.url}"
+                )
+                self.messages.add_user_text(next_step)
                 return False
 
         except Exception as e:
             await self.send_to_websocket(f"Error in step: {e}", debug=True)
             traceback.print_exc()
+            # Get next step from planner
+            next_step = await self.planner.get_next_step(
+                "Encountered an error during step execution",
+                str(e),
+                f"Current URL: {self.page.url}"
+            )
+            self.messages.add_user_text(next_step)
             return False
